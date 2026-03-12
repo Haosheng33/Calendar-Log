@@ -1,11 +1,16 @@
-// Firebase modular SDK (v10+)
-import { initializeApp } from 'firebase/app'
-import { getAuth, GoogleAuthProvider } from 'firebase/auth'
-import { getFirestore } from 'firebase/firestore'
+import { initializeApp, type FirebaseOptions } from 'firebase/app'
+import { getAuth, GoogleAuthProvider, type Auth } from 'firebase/auth'
+import { getFirestore, type Firestore } from 'firebase/firestore'
 
-// Config is injected via Vite env vars (VITE_*). These values are not secret,
-// but missing values will break the app at runtime, so we surface a clear error.
-const firebaseConfig = {
+type FirebaseExports = {
+  firebaseConfigError: string | null
+  firebaseApp: ReturnType<typeof initializeApp> | null
+  auth: Auth | null
+  googleProvider: GoogleAuthProvider | null
+  db: Firestore | null
+}
+
+const firebaseConfig: FirebaseOptions = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
   authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
   projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
@@ -28,4 +33,12 @@ export const firebaseApp = firebaseConfigError ? null : initializeApp(firebaseCo
 export const auth = firebaseApp ? getAuth(firebaseApp) : null
 export const googleProvider = firebaseApp ? new GoogleAuthProvider() : null
 export const db = firebaseApp ? getFirestore(firebaseApp) : null
+
+export const firebase: FirebaseExports = {
+  firebaseConfigError,
+  firebaseApp,
+  auth,
+  googleProvider,
+  db,
+}
 

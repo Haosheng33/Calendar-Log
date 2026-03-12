@@ -420,22 +420,20 @@ function App() {
             data.meal === 'breakfast' || data.meal === 'lunch' || data.meal === 'dinner'
               ? (data.meal as MealCategory)
               : 'snack'
-          return {
+          const entry: FoodEntry = {
             id: d.id,
             name: typeof data.name === 'string' ? data.name : '',
             calories: typeof data.calories === 'number' ? data.calories : 0,
             imageDataUrl: typeof data.imageDataUrl === 'string' ? data.imageDataUrl : undefined,
             imageUrl: typeof data.imageUrl === 'string' ? data.imageUrl : undefined,
             meal,
-            // keep extra fields off the public type; used only for filtering/sorting below
-            _dateKey: dateKey,
-            _createdAtMillis: createdAtMillis,
-          } satisfies FoodEntry
+          }
+          return { entry, dateKey, createdAtMillis }
         })
-        const filtered = (next as unknown as Array<FoodEntry & { _dateKey?: string; _createdAtMillis?: number }>)
-          .filter((e) => e.name && e._dateKey === selectedDate)
-          .sort((a, b) => (a._createdAtMillis ?? 0) - (b._createdAtMillis ?? 0))
-          .map(({ _dateKey: _dk, _createdAtMillis: _cm, ...rest }) => rest)
+        const filtered = next
+          .filter((x) => x.entry.name && x.dateKey === selectedDate)
+          .sort((a, b) => a.createdAtMillis - b.createdAtMillis)
+          .map((x) => x.entry)
         setEntries(filtered)
         setEntriesLoading(false)
       },

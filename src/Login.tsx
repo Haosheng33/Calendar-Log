@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { signInWithPopup } from 'firebase/auth'
 import './Login.css'
-import { auth, googleProvider } from './firebase-config'
+import { auth, firebaseConfigError, googleProvider } from './firebase-config'
 
 export type AuthUser = {
   email: string
@@ -21,6 +21,11 @@ export function Login({ onLogin }: LoginProps) {
     setError(null)
     setLoading(true)
     try {
+      if (firebaseConfigError || !auth || !googleProvider) {
+        throw new Error(
+          firebaseConfigError ?? 'Firebase is not configured. Check your VITE_FIREBASE_* env vars.',
+        )
+      }
       const result = await signInWithPopup(auth, googleProvider)
       const u = result.user
       const user: AuthUser = {
