@@ -537,7 +537,9 @@ function App() {
       return
     }
 
-    if (!file.type.startsWith('image/')) {
+    const hasImageMime = Boolean(file.type) && file.type.startsWith('image/')
+    const hasImageExt = /\.(png|jpe?g|webp|gif|bmp|heic|heif)$/i.test(file.name || '')
+    if (!hasImageMime && !hasImageExt) {
       setNewEntryImage(undefined)
       return
     }
