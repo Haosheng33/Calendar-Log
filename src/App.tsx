@@ -1161,12 +1161,23 @@ function App() {
 
               <label className="field">
                 <span className="field-label">Image (optional)</span>
-                <input
-                  className="file-input"
-                  type="file"
-                  accept="image/*"
-                  onChange={(e) => void handleImageChange(e.target.files?.[0])}
-                />
+                <div className="image-url-row">
+                  <input
+                    className="file-input"
+                    type="file"
+                    accept="image/*"
+                    onChange={(e) => void handleImageChange(e.target.files?.[0])}
+                  />
+                  <button
+                    type="button"
+                    className="secondary-button small"
+                    onClick={() => void handleEstimateCalories()}
+                    disabled={isEstimatingCalories || !newEntryImage}
+                    title="Detect food and calories from uploaded image"
+                  >
+                    {isEstimatingCalories ? 'Detecting…' : 'Detect from image'}
+                  </button>
+                </div>
               </label>
 
               <label className="field field-full">
