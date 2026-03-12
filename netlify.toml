@@ -1,0 +1,10 @@
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+# Single Page App routing (React Router not required; still needed for deep links)
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
