@@ -43,6 +43,13 @@ function getMealMeta(meal: MealCategory) {
 const CALORIE_CACHE_KEY_BASE = 'calorieEstimateCache'
 const KG_PER_LB = 0.45359237
 
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? '').trim()
+
+function apiUrl(path: string) {
+  if (!API_BASE_URL) return path
+  return `${API_BASE_URL.replace(/\/+$/, '')}${path.startsWith('/') ? '' : '/'}${path}`
+}
+
 function userKey(base: string, userId: string | undefined): string {
   return userId ? `${base}_${userId}` : base
 }
@@ -107,7 +114,7 @@ function writeCalorieCache(userEmail: string | undefined, cache: CalorieEstimate
 }
 
 async function estimateCaloriesAI(foodName: string): Promise<number> {
-  const response = await fetch('/api/estimate-calories', {
+  const response = await fetch(apiUrl('/api/estimate-calories'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ foodName }),
@@ -147,7 +154,7 @@ async function estimateCaloriesAI(foodName: string): Promise<number> {
 async function estimateCaloriesFromImage(
   imageDataUrl: string,
 ): Promise<{ name: string | null; calories: number }> {
-  const response = await fetch('/api/estimate-calories-image', {
+  const response = await fetch(apiUrl('/api/estimate-calories-image'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ imageDataUrl }),
@@ -179,7 +186,7 @@ async function estimateCaloriesFromImage(
 async function estimateCaloriesFromImageUrl(
   imageUrl: string,
 ): Promise<{ name: string | null; calories: number }> {
-  const response = await fetch('/api/estimate-calories-image', {
+  const response = await fetch(apiUrl('/api/estimate-calories-image'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ imageUrl }),
@@ -750,7 +757,7 @@ function App() {
     try {
       const profile = profileDoc
 
-      const response = await fetch('/api/recommend-meals', {
+      const response = await fetch(apiUrl('/api/recommend-meals'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

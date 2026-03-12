@@ -1,0 +1,8 @@
+name = "calendar-log-ai"
+main = "src/index.ts"
+compatibility_date = "2026-03-01"
+
+[vars]
+# Set this in Cloudflare as a secret instead of here:
+# GEMINI_API_KEY
+
