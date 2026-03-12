@@ -62,6 +62,22 @@ function extractJsonObject(text: string): any | null {
   }
 }
 
+async function fetchImageAsBase64(url: string): Promise<{ mimeType: string; data: string }> {
+  const resp = await fetch(url)
+  if (!resp.ok) {
+    throw new Error(`Failed to fetch image: HTTP ${resp.status}`)
+  }
+  const contentType = resp.headers.get('Content-Type') || 'image/jpeg'
+  const buf = await resp.arrayBuffer()
+  const bytes = new Uint8Array(buf)
+  let binary = ''
+  for (let i = 0; i < bytes.length; i += 1) {
+    binary += String.fromCharCode(bytes[i]!)
+  }
+  const data = btoa(binary)
+  return { mimeType: contentType, data }
+}
+
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url)
@@ -107,6 +123,59 @@ export default {
           )
         }
         return jsonResponse({ calories: Math.round(calories) })
+      }
+
+      if (url.pathname === '/api/estimate-calories-image') {
+        const body = (await req.json().catch(() => null)) as any
+        const imageDataUrl = typeof body?.imageDataUrl === 'string' ? body.imageDataUrl : ''
+        const imageUrl = typeof body?.imageUrl === 'string' ? body.imageUrl : ''
+
+        let mimeType = 'image/jpeg'
+        let base64Data = ''
+
+        if (imageDataUrl) {
+          const match = imageDataUrl.match(/^data:(.+);base64,(.*)$/)
+          if (!match) {
+            return jsonResponse({ error: 'Invalid imageDataUrl format.' }, { status: 400 })
+          }
+          mimeType = match[1] || 'image/jpeg'
+          base64Data = match[2] || ''
+        } else if (imageUrl) {
+          const fetched = await fetchImageAsBase64(imageUrl)
+          mimeType = fetched.mimeType
+          base64Data = fetched.data
+        } else {
+          return jsonResponse(
+            { error: 'imageDataUrl or imageUrl is required.' },
+            { status: 400 },
+          )
+        }
+
+        const result = await geminiGenerate(apiKey, [
+          {
+            text:
+              'You see a photo of food or drink. Detect what it is and estimate calories for the whole visible portion. Return ONLY JSON like {"name": "ramune soda", "calories": 80}. No other text.',
+          },
+          {
+            inline_data: {
+              mime_type: mimeType,
+              data: base64Data,
+            },
+          } as any,
+        ])
+
+        const text = extractText(result)
+        const parsed = extractJsonObject(text)
+        const name =
+          typeof parsed?.name === 'string' && parsed.name.trim() ? String(parsed.name).trim() : null
+        const calories = parsed?.calories
+        if (typeof calories !== 'number' || !Number.isFinite(calories) || calories < 0) {
+          return jsonResponse(
+            { error: 'AI did not return a valid calorie number from image.', detail: text },
+            { status: 502 },
+          )
+        }
+        return jsonResponse({ name, calories: Math.round(calories) })
       }
 
       if (url.pathname === '/api/recommend-meals') {
