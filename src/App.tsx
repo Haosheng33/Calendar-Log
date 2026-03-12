@@ -1,7 +1,7 @@
 import './App.css'
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { Login, type AuthUser } from './Login'
-import { auth, db, firebaseConfigError, storage } from './firebase-config'
+import { auth, db, firebaseConfigError } from './firebase-config'
 import { onAuthStateChanged, signOut, type User as FirebaseUser } from 'firebase/auth'
 import {
   addDoc,
@@ -15,7 +15,6 @@ import {
   where,
   type DocumentData,
 } from 'firebase/firestore'
-import { getDownloadURL, ref, uploadString } from 'firebase/storage'
 
 type FoodEntry = {
   id: string
@@ -459,19 +458,12 @@ function App() {
     if (!trimmedName) return
     if (!Number.isFinite(entry.calories) || entry.calories < 0) return
 
-    // Firestore docs are limited to ~1MB; never store large base64 images there.
-    // If we have an uploaded image, put it in Firebase Storage and store only the URL.
+    // Firestore docs are limited to ~1MB; avoid storing very large base64 images.
+    // We still keep the image in memory for detection, but drop it when persisting if too large.
     let imageUrl: string | null = entry.imageUrl ?? null
     let imageDataUrl: string | null = entry.imageDataUrl ?? null
 
     if (imageDataUrl && imageDataUrl.length > 600_000) {
-      if (!storage) {
-        throw new Error('Image is too large and Storage is not available.')
-      }
-      const objectPath = `users/${userId}/images/${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-      const storageRef = ref(storage, objectPath)
-      await uploadString(storageRef, imageDataUrl, 'data_url')
-      imageUrl = await getDownloadURL(storageRef)
       imageDataUrl = null
     }
 
