@@ -22,6 +22,7 @@ type FoodEntry = {
   calories: number
   imageDataUrl?: string
   imageUrl?: string
+  iconEmoji?: string
   meal?: MealCategory
 }
 
@@ -427,12 +428,14 @@ function App() {
             data.meal === 'breakfast' || data.meal === 'lunch' || data.meal === 'dinner'
               ? (data.meal as MealCategory)
               : 'snack'
+          const iconEmoji = typeof data.iconEmoji === 'string' ? data.iconEmoji : undefined
           const entry: FoodEntry = {
             id: d.id,
             name: typeof data.name === 'string' ? data.name : '',
             calories: typeof data.calories === 'number' ? data.calories : 0,
             imageDataUrl: typeof data.imageDataUrl === 'string' ? data.imageDataUrl : undefined,
             imageUrl: typeof data.imageUrl === 'string' ? data.imageUrl : undefined,
+            iconEmoji,
             meal,
           }
           return { entry, dateKey, createdAtMillis }
@@ -463,9 +466,11 @@ function App() {
     let imageUrl: string | null = entry.imageUrl ?? null
     let imageDataUrl: string | null = entry.imageDataUrl ?? null
 
-    if (imageDataUrl && imageDataUrl.length > 600_000) {
-      imageDataUrl = null
-    }
+    // If the user uploaded an image, we do NOT persist it (to avoid size limits and keep storage free).
+    // We store only a generated emoji icon based on the detected/entered name.
+    if (imageDataUrl) imageDataUrl = null
+    if (imageUrl) imageUrl = null
+    const iconEmoji = entry.iconEmoji ?? getFoodEmoji(trimmedName)
 
     await addDoc(collection(db, 'calendar_logs'), {
       uid: userId,
@@ -475,6 +480,7 @@ function App() {
       calories: entry.calories,
       imageDataUrl,
       imageUrl,
+      iconEmoji,
       meal: entry.meal ?? 'snack',
       createdAt: serverTimestamp(),
       createdAtMillis: Date.now(),
@@ -526,6 +532,7 @@ function App() {
         calories: caloriesNumber,
         imageDataUrl: newEntryImage,
         imageUrl: newEntryImageUrl.trim() || undefined,
+        iconEmoji: getFoodEmoji(newEntryName),
         meal: newEntryMeal,
       })
       setNewEntryName('')
@@ -573,6 +580,8 @@ function App() {
         const { name, calories } = await estimateCaloriesFromImage(newEntryImage)
         if (name && name.trim()) setNewEntryName(name.trim())
         setNewEntryCalories(calories)
+        // We only use the upload for detection; don't keep the huge data URL in state.
+        setNewEntryImage(undefined)
       } catch (err) {
         setEstimateError(
           err instanceof Error ? err.message : 'Failed to estimate calories from image.',
@@ -1256,12 +1265,16 @@ function App() {
                           style={{ display: 'none' }}
                           aria-hidden="true"
                         >
-                          <span className="log-thumb-initial">{getFoodEmoji(entry.name)}</span>
+                          <span className="log-thumb-initial">
+                            {entry.iconEmoji ?? getFoodEmoji(entry.name)}
+                          </span>
                         </div>
                       </>
                     ) : (
                       <div className="log-thumb auto" aria-hidden="true">
-                        <span className="log-thumb-initial">{getFoodEmoji(entry.name)}</span>
+                        <span className="log-thumb-initial">
+                          {entry.iconEmoji ?? getFoodEmoji(entry.name)}
+                        </span>
                       </div>
                     )}
                     <div className="log-meta">
