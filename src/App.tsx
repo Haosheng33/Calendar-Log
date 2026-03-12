@@ -562,17 +562,8 @@ function App() {
       setIsEstimatingCalories(true)
       try {
         const { name, calories } = await estimateCaloriesFromImage(newEntryImage)
-        const entryName = name?.trim() || 'Detected food'
-        addEntry({
-          name: entryName,
-          calories,
-          imageDataUrl: newEntryImage,
-          meal: newEntryMeal,
-        })
-        setNewEntryName('')
-        setNewEntryCalories('')
-        setNewEntryMeal('breakfast')
-        setNewEntryImage(undefined)
+        if (name && name.trim()) setNewEntryName(name.trim())
+        setNewEntryCalories(calories)
       } catch (err) {
         setEstimateError(
           err instanceof Error ? err.message : 'Failed to estimate calories from image.',
@@ -588,17 +579,8 @@ function App() {
       setIsEstimatingCalories(true)
       try {
         const result = await estimateCaloriesFromImageUrl(imageUrl)
-        const entryName = result.name?.trim() || 'Detected food'
-        addEntry({
-          name: entryName,
-          calories: result.calories,
-          imageUrl,
-          meal: newEntryMeal,
-        })
-        setNewEntryName('')
-        setNewEntryCalories('')
-        setNewEntryMeal('breakfast')
-        setNewEntryImageUrl('')
+        if (result.name && result.name.trim()) setNewEntryName(result.name.trim())
+        setNewEntryCalories(result.calories)
       } catch (err) {
         setEstimateError(
           err instanceof Error ? err.message : 'Failed to estimate from image URL.',
