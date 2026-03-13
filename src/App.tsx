@@ -2,12 +2,16 @@ import './App.css'
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { Login, type AuthUser } from './Login'
 import { auth, db, firebaseConfigError } from './firebase-config'
+import { COOK_COMBO_OPTIONS, type ComboCategory } from './data/comboLibrary'
+import { BILIBILI_RECIPE_LIBRARY, type BilibiliRecipeResult } from './data/bilibiliLibrary'
+import { COOK_RECIPE_SNAPSHOT } from './data/cookRecipeSnapshot'
 import { onAuthStateChanged, signOut, type User as FirebaseUser } from 'firebase/auth'
 import {
   addDoc,
   collection,
   deleteDoc,
   doc,
+  getCountFromServer,
   onSnapshot,
   query,
   serverTimestamp,
@@ -28,6 +32,11 @@ type FoodEntry = {
 
 type MealCategory = 'breakfast' | 'lunch' | 'dinner' | 'snack'
 
+type Theme = 'light' | 'dark'
+type CoachMode = 'normal' | 'video'
+
+const THEME_KEY = 'foodLogTheme'
+
 function getMealMeta(meal: MealCategory) {
   switch (meal) {
     case 'breakfast':
@@ -45,10 +54,181 @@ const CALORIE_CACHE_KEY_BASE = 'calorieEstimateCache'
 const KG_PER_LB = 0.45359237
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? '').trim()
+const OWNER_EMAIL = (import.meta.env.VITE_OWNER_EMAIL ?? '').trim().toLowerCase()
+const COACH_CACHE_KEY = 'coachRecommendationCache'
+const COACH_CACHE_TTL_MS = 10 * 60 * 1000
+const COACH_PROMPT_VERSION = 4
+const COOK_RECIPE_CSV_URL =
+  'https://raw.githubusercontent.com/YunYouJun/cook/main/app/data/recipe.csv'
+const COOK_RECIPE_CACHE_KEY = 'cookRecipeCsvCache'
+const COOK_RECIPE_CACHE_TTL_MS = 12 * 60 * 60 * 1000
+
+type CookCsvRecipe = {
+  name: string
+  stuff: string
+  bv: string
+  methods: string
+  tools: string
+}
+
+const COMBO_CATEGORY_ORDER: ComboCategory[] = ['vegetable', 'meat', 'mainMeal', 'tool']
+const COMBO_CATEGORY_LABEL: Record<ComboCategory, string> = {
+  vegetable: 'Vegetables',
+  meat: 'Meat',
+  mainMeal: 'Main meal',
+  tool: 'Tool to cook',
+}
 
 function apiUrl(path: string) {
   if (!API_BASE_URL) return path
   return `${API_BASE_URL.replace(/\/+$/, '')}${path.startsWith('/') ? '' : '/'}${path}`
+}
+
+function readCoachCache(): Record<string, { recommendation: string; timestamp: number }> {
+  try {
+    const raw = window.localStorage.getItem(COACH_CACHE_KEY)
+    if (!raw) return {}
+    const parsed = JSON.parse(raw) as unknown
+    if (!parsed || typeof parsed !== 'object') return {}
+    return parsed as Record<string, { recommendation: string; timestamp: number }>
+  } catch {
+    return {}
+  }
+}
+
+function writeCoachCache(cache: Record<string, { recommendation: string; timestamp: number }>) {
+  try {
+    window.localStorage.setItem(COACH_CACHE_KEY, JSON.stringify(cache))
+  } catch {
+    // ignore
+  }
+}
+
+function readCookRecipeCache(): CookCsvRecipe[] | null {
+  try {
+    const raw = window.localStorage.getItem(COOK_RECIPE_CACHE_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as { timestamp?: unknown; rows?: unknown }
+    if (!parsed || typeof parsed !== 'object') return null
+    const timestamp = Number(parsed.timestamp ?? 0)
+    if (!timestamp || Date.now() - timestamp > COOK_RECIPE_CACHE_TTL_MS) return null
+    if (!Array.isArray(parsed.rows)) return null
+    return parsed.rows as CookCsvRecipe[]
+  } catch {
+    return null
+  }
+}
+
+function writeCookRecipeCache(rows: CookCsvRecipe[]) {
+  try {
+    window.localStorage.setItem(
+      COOK_RECIPE_CACHE_KEY,
+      JSON.stringify({ timestamp: Date.now(), rows }),
+    )
+  } catch {
+    // ignore cache errors
+  }
+}
+
+function parseCookCsv(text: string): CookCsvRecipe[] {
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+  if (lines.length <= 1) return []
+  const rows: CookCsvRecipe[] = []
+  for (const line of lines.slice(1)) {
+    const cols = line.split(',')
+    const name = (cols[0] ?? '').trim()
+    const stuff = (cols[1] ?? '').trim()
+    const bv = (cols[2] ?? '').trim()
+    const methods = (cols[5] ?? '').trim()
+    const tools = (cols[6] ?? '').trim()
+    if (!name || !stuff || !/^BV/i.test(bv)) continue
+    rows.push({ name, stuff, bv, methods, tools })
+  }
+  return rows
+}
+
+async function fetchCookRecipeRows(): Promise<CookCsvRecipe[]> {
+  const cached = readCookRecipeCache()
+  if (cached && cached.length) return cached
+
+  const response = await fetch(COOK_RECIPE_CSV_URL)
+  if (!response.ok) {
+    throw new Error(`Failed to fetch cook recipe data (HTTP ${response.status}).`)
+  }
+  const csvText = await response.text()
+  const rows = parseCookCsv(csvText)
+  if (!rows.length) {
+    throw new Error('Cook recipe data is empty or invalid.')
+  }
+  writeCookRecipeCache(rows)
+  return rows
+}
+
+function buildBilibiliRecipeResults(
+  selectedCombos: string[],
+  cookRows: CookCsvRecipe[],
+): BilibiliRecipeResult[] {
+  const selectedSet = new Set(selectedCombos)
+  const selectedOptions = COOK_COMBO_OPTIONS.filter((o) => selectedSet.has(o.id))
+  const selectedIngredientOptions = selectedOptions.filter((o) => o.category !== 'tool')
+  const selectedToolOptions = selectedOptions.filter((o) => o.category === 'tool')
+
+  const manualMatches = BILIBILI_RECIPE_LIBRARY.filter((item) =>
+    item.comboIds.every((comboId) => selectedSet.has(comboId)),
+  )
+
+  const scored = cookRows
+    .map((row, index) => {
+      const ingredientText = row.stuff.replaceAll('、', ' ')
+      const toolText = `${row.tools} ${row.methods}`.replaceAll('、', ' ')
+      const ingredientMatchCount = selectedIngredientOptions.filter((option) =>
+        option.aliasesZh.some((alias) => ingredientText.includes(alias)),
+      ).length
+      const toolMatchCount = selectedToolOptions.filter((option) =>
+        option.aliasesZh.some((alias) => toolText.includes(alias)),
+      ).length
+      return { row, index, ingredientMatchCount, toolMatchCount }
+    })
+    .filter((item) => {
+      const ingredientMatched =
+        selectedIngredientOptions.length === 0 ||
+        item.ingredientMatchCount >= selectedIngredientOptions.length
+      const toolMatched =
+        selectedToolOptions.length === 0 || item.toolMatchCount >= selectedToolOptions.length
+      return ingredientMatched && toolMatched
+    })
+    .sort(
+      (a, b) =>
+        b.ingredientMatchCount + b.toolMatchCount - (a.ingredientMatchCount + a.toolMatchCount) ||
+        a.index - b.index,
+    )
+
+  const seen = new Set<string>()
+  const combined: BilibiliRecipeResult[] = []
+
+  for (const item of manualMatches) {
+    if (seen.has(item.url)) continue
+    seen.add(item.url)
+    combined.push(item)
+  }
+
+  for (const item of scored) {
+    const url = `https://www.bilibili.com/video/${item.row.bv}/`
+    if (seen.has(url)) continue
+    seen.add(url)
+    combined.push({
+      id: `cook-${item.row.bv}-${item.index}`,
+      title: item.row.name,
+      comboIds: selectedCombos,
+      url,
+    })
+    if (combined.length >= 160) break
+  }
+
+  return combined
 }
 
 function userKey(base: string, userId: string | undefined): string {
@@ -300,10 +480,24 @@ function App() {
   const [coachLoading, setCoachLoading] = useState(false)
   const [coachError, setCoachError] = useState<string | null>(null)
   const [coachVisible, setCoachVisible] = useState(true)
+  const [coachMode, setCoachMode] = useState<CoachMode>('normal')
+  const [selectedCombos, setSelectedCombos] = useState<string[]>([])
+  const [cookRecipeRows, setCookRecipeRows] = useState<CookCsvRecipe[]>(COOK_RECIPE_SNAPSHOT)
+  const [cookRecipeLoading, setCookRecipeLoading] = useState(false)
+  const [cookRecipeError, setCookRecipeError] = useState<string | null>(null)
+
+  const [theme, setTheme] = useState<Theme>(() => {
+    if (typeof window === 'undefined') return 'dark'
+    const saved = window.localStorage.getItem(THEME_KEY)
+    return saved === 'light' || saved === 'dark' ? (saved as Theme) : 'dark'
+  })
 
   const [authLoading, setAuthLoading] = useState(true)
   const [user, setUser] = useState<AuthUser | null>(null)
   const [userId, setUserId] = useState<string | null>(null)
+  const [totalUsers, setTotalUsers] = useState<number | null>(null)
+  const [totalUsersLoading, setTotalUsersLoading] = useState(false)
+  const [totalUsersError, setTotalUsersError] = useState<string | null>(null)
 
   const [entriesLoading, setEntriesLoading] = useState(true)
   const [entries, setEntries] = useState<FoodEntry[]>([])
@@ -315,6 +509,43 @@ function App() {
     setPickerMonth(currentMonth)
     setPickerYear(currentYear)
   }, [currentMonth, currentYear])
+
+  useEffect(() => {
+    if (typeof document !== 'undefined') {
+      document.documentElement.setAttribute('data-theme', theme)
+    }
+    try {
+      window.localStorage.setItem(THEME_KEY, theme)
+    } catch {
+      // ignore
+    }
+  }, [theme])
+
+  useEffect(() => {
+    if (coachMode !== 'video') return
+
+    let cancelled = false
+    setCookRecipeLoading(false)
+    setCookRecipeError(null)
+
+    void fetchCookRecipeRows()
+      .then((rows) => {
+        if (cancelled) return
+        if (rows.length > 0) setCookRecipeRows(rows)
+      })
+      .catch((err) => {
+        if (cancelled) return
+        if (!cookRecipeRows.length) {
+          setCookRecipeError(
+            err instanceof Error ? err.message : 'Failed to import recipe videos from cook data.',
+          )
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [coachMode])
 
   useEffect(() => {
     if (!auth) {
@@ -337,6 +568,44 @@ function App() {
     })
     return () => unsub()
   }, [])
+
+  useEffect(() => {
+    if (!db || !userId || !user?.email) return
+
+    // Record a unique active user document so we can count total users.
+    void setDoc(
+      doc(db, 'app_users', userId),
+      {
+        uid: userId,
+        email: user.email,
+        name: user.name ?? null,
+        lastSeenAt: serverTimestamp(),
+      },
+      { merge: true },
+    )
+  }, [db, userId, user?.email, user?.name])
+
+  const isOwner = Boolean(user?.email && OWNER_EMAIL && user.email.toLowerCase() === OWNER_EMAIL)
+
+  useEffect(() => {
+    if (!db || !isOwner) {
+      setTotalUsers(null)
+      setTotalUsersError(null)
+      setTotalUsersLoading(false)
+      return
+    }
+
+    setTotalUsersLoading(true)
+    setTotalUsersError(null)
+    void getCountFromServer(collection(db, 'app_users'))
+      .then((snapshot) => {
+        setTotalUsers(snapshot.data().count)
+      })
+      .catch((err) => {
+        setTotalUsersError(err instanceof Error ? err.message : 'Failed to load user count.')
+      })
+      .finally(() => setTotalUsersLoading(false))
+  }, [db, isOwner])
 
   const [profileLoading, setProfileLoading] = useState(true)
   const [profileDoc, setProfileDoc] = useState<CalorieProfile | null>(null)
@@ -736,6 +1005,20 @@ function App() {
     } satisfies Record<MealCategory, number>
   }, [mealCalories, totalCaloriesForDay])
 
+  const bilibiliRecipeResults = useMemo(
+    () => buildBilibiliRecipeResults(selectedCombos, cookRecipeRows),
+    [selectedCombos, cookRecipeRows],
+  )
+  const comboOptionsByCategory = useMemo(
+    () =>
+      COMBO_CATEGORY_ORDER.map((category) => ({
+        category,
+        label: COMBO_CATEGORY_LABEL[category],
+        options: COOK_COMBO_OPTIONS.filter((option) => option.category === category),
+      })),
+    [],
+  )
+
   if (authLoading) {
     return (
       <div className="login-page">
@@ -757,32 +1040,116 @@ function App() {
     setCoachError(null)
     setCoachLoading(true)
     try {
+      if (coachMode === 'video') {
+        setCoachAdvice(null)
+        setCoachVisible(true)
+        return
+      }
+
+      if (import.meta.env.PROD && !API_BASE_URL) {
+        throw new Error(
+          'AI coach API is not configured for production. Set VITE_API_BASE_URL to your Worker URL and redeploy.',
+        )
+      }
+
       const profile = profileDoc
+      const selectedComboOptions = COOK_COMBO_OPTIONS.filter((c) => selectedCombos.includes(c.id))
+      const comboSelection = selectedComboOptions.map((c) => `${c.icon} ${c.label}`)
+      const comboRecipeLibrary = selectedComboOptions.flatMap((c) =>
+        c.recipeIdeas.map((recipe) => `${c.label}: ${recipe}`),
+      )
+      const recentEntries = entries.slice(-8).map((e) => ({ name: e.name, calories: e.calories }))
+
+      const cacheKey = JSON.stringify({
+        v: COACH_PROMPT_VERSION,
+        mode: coachMode,
+        dailyCalories: dailyCalorieNeed,
+        profile: profile
+          ? {
+              sex: profile.sex,
+              age: profile.age,
+              heightCm: profile.heightCm,
+              weightKg: profile.weightKg,
+            }
+          : null,
+        combos: [...comboSelection].sort(),
+        comboRecipes: [...comboRecipeLibrary].sort(),
+        entries: recentEntries,
+      })
+      const useCache = true
+      const coachCache = readCoachCache()
+      const cached = coachCache[cacheKey]
+      if (useCache) {
+        if (
+          cached &&
+          typeof cached.recommendation === 'string' &&
+          Date.now() - cached.timestamp < COACH_CACHE_TTL_MS
+        ) {
+          setCoachAdvice(cached.recommendation)
+          setCoachVisible(true)
+          return
+        }
+      }
 
       const response = await fetch(apiUrl('/api/recommend-meals'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          mode: coachMode,
           dailyCalories: dailyCalorieNeed,
           profile,
-          entries: entries.map((e) => ({ name: e.name, calories: e.calories })),
+          entries: recentEntries,
+          preferredCombos: comboSelection,
+          preferredComboRecipes: comboRecipeLibrary,
         }),
       })
 
-      const data = (await response.json().catch(() => null)) as
-        | { recommendation?: string; error?: string }
-        | null
+      const rawText = await response.text().catch(() => '')
+      const data = (() => {
+        try {
+          return JSON.parse(rawText) as { recommendation?: string; error?: string; detail?: string }
+        } catch {
+          return null
+        }
+      })()
 
       if (!response.ok) {
-        throw new Error(
+        const baseMessage =
           typeof data?.error === 'string'
             ? data.error
-            : 'AI coach could not generate a recommendation.',
+            : `AI coach request failed (HTTP ${response.status}).`
+        const detail =
+          typeof data?.detail === 'string'
+            ? data.detail
+            : rawText && rawText.length < 800
+              ? rawText
+              : ''
+        throw new Error(
+          detail ? `${baseMessage}\n${detail}` : baseMessage,
         )
       }
 
-      setCoachAdvice(data?.recommendation ?? null)
+      const recommendationRaw = data?.recommendation ?? null
+      if (typeof recommendationRaw !== 'string' || !recommendationRaw.trim()) {
+        throw new Error('AI coach returned an empty response.')
+      }
+      const recommendation = recommendationRaw
+      setCoachAdvice(recommendation)
       setCoachVisible(true)
+      if (recommendation && useCache) {
+        coachCache[cacheKey] = { recommendation, timestamp: Date.now() }
+        // simple pruning to avoid unbounded growth
+        const keys = Object.keys(coachCache)
+        if (keys.length > 30) {
+          keys
+            .sort((a, b) => coachCache[a].timestamp - coachCache[b].timestamp)
+            .slice(0, keys.length - 30)
+            .forEach((k) => {
+              delete coachCache[k]
+            })
+        }
+        writeCoachCache(coachCache)
+      }
     } catch (err) {
       setCoachError(
         err instanceof Error ? err.message : 'AI coach could not generate a recommendation.',
@@ -797,8 +1164,14 @@ function App() {
     await signOut(auth)
   }
 
+  const toggleCombo = (id: string) => {
+    setSelectedCombos((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+    )
+  }
+
   return (
-    <div className="app-root">
+    <div className={`app-root theme-${theme}`}>
       <header className="app-header">
         <div className="app-header-inner">
           <div>
@@ -809,6 +1182,19 @@ function App() {
             </p>
           </div>
           <div className="app-header-user">
+            <button
+              type="button"
+              className="theme-toggle"
+              onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+            >
+              {theme === 'dark' ? '☀︎ Light' : '🌙 Dark'}
+            </button>
+            {isOwner && (
+              <div className="admin-users-pill" title="Admin-only total users">
+                Users:{' '}
+                {totalUsersLoading ? '…' : totalUsersError ? 'error' : (totalUsers ?? 0).toString()}
+              </div>
+            )}
             <span className="app-user-name">{user.name || user.email}</span>
             <button type="button" className="logout-button" onClick={handleLogout}>
               Log out
@@ -1047,28 +1433,116 @@ function App() {
                   })}
                 </div>
 
+                <div className="combo-picker" aria-label="Choose preferred recipe combinations">
+                  <p className="combo-title">Choose ingredient combos</p>
+                  <div className="combo-groups">
+                    {comboOptionsByCategory.map((group) => (
+                      <div key={group.category} className="combo-group">
+                        <p className="combo-group-title">{group.label}</p>
+                        <div className="combo-tags">
+                          {group.options.map((option) => {
+                            const active = selectedCombos.includes(option.id)
+                            return (
+                              <button
+                                key={option.id}
+                                type="button"
+                                className={`combo-tag ${active ? 'active' : ''}`}
+                                onClick={() => toggleCombo(option.id)}
+                                aria-pressed={active}
+                              >
+                                <span aria-hidden="true">{option.icon}</span> {option.label}
+                              </button>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
                 <div className="coach-row">
-                  <button
-                    type="button"
-                    className="secondary-button small"
-                    onClick={() => void handleAskCoach()}
-                    disabled={coachLoading}
+                  <select
+                    className="log-input coach-mode-select"
+                    value={coachMode}
+                    onChange={(e) => {
+                      const nextMode = e.target.value === 'video' ? 'video' : 'normal'
+                      setCoachMode(nextMode)
+                      setCoachError(null)
+                      setCoachAdvice(null)
+                      setCoachVisible(true)
+                    }}
+                    title="Choose AI coach output mode"
                   >
-                    {coachLoading ? 'Asking coach…' : 'Ask AI coach'}
-                  </button>
-                  {coachAdvice && !coachLoading && (
+                    <option value="normal">Normal recipe plan</option>
+                    <option value="video">Bilibili recipe videos</option>
+                  </select>
+                  {coachMode === 'normal' && (
+                    <button
+                      type="button"
+                      className="secondary-button small"
+                      onClick={() => void handleAskCoach()}
+                      disabled={coachLoading}
+                    >
+                      {coachLoading ? 'Asking coach…' : 'Ask AI coach'}
+                    </button>
+                  )}
+                  {(coachMode === 'normal'
+                    ? Boolean(coachAdvice)
+                    : selectedCombos.length > 0 && bilibiliRecipeResults.length > 0) && (
                     <button
                       type="button"
                       className="secondary-button small"
                       onClick={() => setCoachVisible((v) => !v)}
                     >
-                      {coachVisible ? 'Hide plan' : 'Show plan'}
+                      {coachVisible ? 'Hide results' : 'Show results'}
                     </button>
                   )}
                 </div>
+                {coachMode === 'video' && (
+                  <p className="coach-video-hint">
+                    Pick ingredients first. After you choose at least one item, matching Bilibili videos
+                    will appear here and open in a new tab.
+                  </p>
+                )}
                 {coachError && <p className="form-error">{coachError}</p>}
-                {coachAdvice && coachVisible && (() => {
-                  const parts = coachAdvice.split('###')
+                {coachMode === 'video' && selectedCombos.length > 0 && cookRecipeError && (
+                  <p className="form-error">{cookRecipeError}</p>
+                )}
+                {coachMode === 'video' && selectedCombos.length > 0 && coachVisible && (
+                  <div className="coach-advice">
+                    <div className="coach-section">
+                      <p className="coach-title">
+                        Matching Bilibili recipes ({bilibiliRecipeResults.length})
+                      </p>
+                      {cookRecipeLoading ? (
+                        <p className="coach-video-hint">Importing recipe videos from cook data…</p>
+                      ) : bilibiliRecipeResults.length > 0 ? (
+                        <div className="bili-result-grid">
+                          {bilibiliRecipeResults.map((item) => (
+                            <a
+                              key={item.id}
+                              className="bili-result-chip"
+                              href={item.url}
+                              target="_blank"
+                              rel="noreferrer"
+                              title={`Open Bilibili page: ${item.title}`}
+                            >
+                              <span aria-hidden="true">🎬</span> {item.title}
+                            </a>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="coach-video-hint">
+                          No matching Bilibili videos found for the selected combo in imported cook data.
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                )}
+                {coachMode === 'normal' && coachAdvice && coachVisible && (() => {
+
+                  const adviceText = coachAdvice ?? ''
+                  const parts = adviceText.split('###')
                   const mainPlan = parts[0]?.trim() ?? ''
                   const tipsBlock =
                     parts.length > 1 ? `###${parts.slice(1).join('###')}`.trim() : ''

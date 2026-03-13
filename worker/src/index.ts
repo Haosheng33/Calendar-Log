@@ -1,3 +1,5 @@
+import { getAllowedRecipes } from './comboLibrary'
+
 type Env = {
   GEMINI_API_KEY: string
 }
@@ -22,6 +24,7 @@ function textResponse(text: string, init?: ResponseInit) {
 async function geminiGenerate(
   apiKey: string,
   parts: Array<Record<string, unknown>>,
+  generationConfig?: Record<string, unknown>,
 ): Promise<unknown> {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(
     apiKey,
@@ -31,7 +34,10 @@ async function geminiGenerate(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       contents: [{ role: 'user', parts }],
-      generationConfig: { temperature: 0.2 },
+      generationConfig: {
+        temperature: 0.2,
+        ...(generationConfig ?? {}),
+      },
     }),
   })
   const text = await resp.text().catch(() => '')
@@ -60,6 +66,15 @@ function extractJsonObject(text: string): any | null {
   } catch {
     return null
   }
+}
+
+function hasVideoStructure(text: string): boolean {
+  const lower = text.toLowerCase()
+  return (
+    lower.includes('### shot list') &&
+    lower.includes('### voiceover script') &&
+    lower.includes('### search keywords')
+  )
 }
 
 async function fetchImageAsBase64(url: string): Promise<{ mimeType: string; data: string }> {
@@ -180,9 +195,18 @@ export default {
 
       if (url.pathname === '/api/recommend-meals') {
         const body = (await req.json().catch(() => null)) as any
+        const mode = body?.mode === 'video' ? 'video' : 'normal'
         const dailyCalories = Number(body?.dailyCalories ?? 0)
         const profile = body?.profile ?? {}
         const entries = Array.isArray(body?.entries) ? body.entries : []
+        const preferredCombos = Array.isArray(body?.preferredCombos) ? body.preferredCombos : []
+        const preferredComboRecipes = Array.isArray(body?.preferredComboRecipes)
+          ? body.preferredComboRecipes
+          : []
+        const allowedRecipeLines =
+          preferredComboRecipes.length > 0
+            ? preferredComboRecipes.map((r: any) => String(r))
+            : getAllowedRecipes(preferredCombos.map((c: any) => String(c)))
 
         if (!Number.isFinite(dailyCalories) || dailyCalories <= 0) {
           return jsonResponse(
@@ -193,8 +217,9 @@ export default {
 
         const prompt = [
           'You are a friendly nutrition coach helping with fat loss.',
-          'You must base all meal suggestions on typical Chinese and Asian-style home recipes that could be found on this recipe site: https://cook.yunyoujun.cn/',
-          'Do not invent exotic Western dishes; prioritize rice, noodles, soups, stir-fries, steamed dishes, and simple vegetables and proteins common in that style of cooking.',
+          'Use ONLY the local recipe combos listed below as your source of meal ideas.',
+          'Do not reference any websites or external datasets.',
+          'Do not invent dishes outside this local combo library.',
           'User details (may be partial):',
           `- Sex: ${profile.sex ?? 'unknown'}`,
           `- Age: ${profile.age ?? 'unknown'} years`,
@@ -207,13 +232,79 @@ export default {
             ? entries.map((e: any) => `- ${String(e?.name ?? '')}: ${Number(e?.calories ?? 0)} kcal`)
             : ['- (nothing logged yet)']),
           '',
-          'Return a neat, readable plan. Use sections with "###".',
+          'Preferred ingredient/style tags selected by user:',
+          ...(preferredCombos.length
+            ? preferredCombos.map((c: any) => `- ${String(c)}`)
+            : ['- (none selected)']),
+          '',
+          'Local combo library you MUST use:',
+          ...allowedRecipeLines.map((line) => `- ${line}`),
+          '',
+          mode === 'video'
+            ? [
+                'Return a VIDEO SCRIPT plan, not a regular meal summary.',
+                'Use this exact structure:',
+                'Section 1 (no heading marks): "Video concept + timeline" with breakfast/lunch/dinner/snack and rough calories.',
+                'Section 2 heading: "### Shot list"',
+                'Section 3 heading: "### Voiceover script"',
+                'Section 4 heading: "### Search keywords"',
+                'In "Shot list", include 6-10 short shots total across the day.',
+                'In "Voiceover script", write short narration lines for each meal.',
+              ].join(' ')
+            : [
+                'Return a full RECIPE PLAN (not just dish names).',
+                'Use headings with "### Breakfast", "### Lunch", "### Dinner", "### Snacks".',
+                'For each meal include:',
+                '1) Dish name',
+                '2) Ingredients (4-8 bullet points with rough amounts)',
+                '3) Steps (3-6 short bullet points)',
+                '4) Estimated calories for that meal',
+                'At the end include a short daily total and 1-2 adjustment tips.',
+              ].join(' '),
         ].join('\n')
 
-        const result = await geminiGenerate(apiKey, [{ text: prompt }])
+        const result = await geminiGenerate(
+          apiKey,
+          [
+            {
+              text:
+                `${prompt}\n` +
+                (mode === 'video'
+                  ? 'Keep it concise and practical. Maximum ~320 words total. Use compact bullet points.'
+                  : 'Write practical home-cooking details. Target ~450-750 words so recipes include real ingredients and steps.'),
+            },
+          ],
+          { maxOutputTokens: mode === 'video' ? 420 : 900 },
+        )
         const recommendation = extractText(result).trim()
         if (!recommendation) {
           return jsonResponse({ error: 'AI coach could not generate a recommendation.' }, { status: 502 })
+        }
+        if (mode === 'video' && !hasVideoStructure(recommendation)) {
+          const rewrite = await geminiGenerate(
+            apiKey,
+            [
+              {
+                text:
+                  'Rewrite the following nutrition plan into strict video format.\n' +
+                  'Rules:\n' +
+                  '- Keep original food ideas and calories as much as possible.\n' +
+                  '- Return ONLY plain text (no markdown code fence).\n' +
+                  '- Structure:\n' +
+                  '1) Intro block (no heading marks): "Video concept + timeline"\n' +
+                  '2) Heading exactly: ### Shot list\n' +
+                  '3) Heading exactly: ### Voiceover script\n' +
+                  '4) Heading exactly: ### Search keywords\n' +
+                  '- Keep concise, around 180-280 words.\n\n' +
+                  `Input text:\n${recommendation}`,
+              },
+            ],
+            { maxOutputTokens: 420 },
+          )
+          const rewritten = extractText(rewrite).trim()
+          if (rewritten && hasVideoStructure(rewritten)) {
+            return jsonResponse({ recommendation: rewritten })
+          }
         }
         return jsonResponse({ recommendation })
       }

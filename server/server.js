@@ -1,5 +1,6 @@
 import 'dotenv/config'
 import express from 'express'
+import { getAllowedRecipes } from './comboLibrary.js'
 
 const app = express()
 app.use(express.json({ limit: '1mb' }))
@@ -9,6 +10,15 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY
 app.get('/api/health', (_req, res) => {
   res.json({ ok: true })
 })
+
+function hasVideoStructure(text = '') {
+  const lower = String(text).toLowerCase()
+  return (
+    lower.includes('### shot list') &&
+    lower.includes('### voiceover script') &&
+    lower.includes('### search keywords')
+  )
+}
 
 app.post('/api/estimate-calories', async (req, res) => {
   try {
@@ -61,9 +71,18 @@ app.post('/api/estimate-calories', async (req, res) => {
 app.post('/api/recommend-meals', async (req, res) => {
   try {
     const body = req.body ?? {}
+    const mode = body.mode === 'video' ? 'video' : 'normal'
     const dailyCalories = Number(body.dailyCalories ?? 0)
     const profile = body.profile ?? {}
     const entries = Array.isArray(body.entries) ? body.entries : []
+    const preferredCombos = Array.isArray(body.preferredCombos) ? body.preferredCombos : []
+    const preferredComboRecipes = Array.isArray(body.preferredComboRecipes)
+      ? body.preferredComboRecipes
+      : []
+    const allowedRecipeLines =
+      preferredComboRecipes.length > 0
+        ? preferredComboRecipes.map((r) => String(r))
+        : getAllowedRecipes(preferredCombos.map((c) => String(c)))
 
     if (!Number.isFinite(dailyCalories) || dailyCalories <= 0) {
       res.status(400).json({ error: 'dailyCalories is required and must be a positive number.' })
@@ -77,8 +96,9 @@ app.post('/api/recommend-meals', async (req, res) => {
         model: 'gpt-oss:20b',
         prompt: [
           'You are a friendly nutrition coach helping with fat loss.',
-          'You must base all meal suggestions on typical Chinese and Asian-style home recipes that could be found on this recipe site: https://cook.yunyoujun.cn/',
-          'Do not invent exotic Western dishes; prioritize rice, noodles, soups, stir-fries, steamed dishes, and simple vegetables and proteins common in that style of cooking.',
+          'Use ONLY the local recipe combos listed below as your source of meal ideas.',
+          'Do not reference any websites or external datasets.',
+          'Do not invent dishes outside this local combo library.',
           'User details (may be partial):',
           `- Sex: ${profile.sex ?? 'unknown'}`,
           `- Age: ${profile.age ?? 'unknown'} years`,
@@ -93,9 +113,39 @@ app.post('/api/recommend-meals', async (req, res) => {
               )
             : ['- No foods logged yet.']),
           '',
-          'TASK: Suggest one day of simple, realistic meals from that recipe site style that help reduce body fat while staying close to the daily calorie target.',
-          'Return clear text with sections like "Breakfast", "Lunch", "Dinner", "Snacks" and rough calories per item.',
-          'Keep the tone short and practical.',
+          'Preferred ingredient/style tags selected by user:',
+          ...(preferredCombos.length
+            ? preferredCombos.map((c) => `- ${String(c)}`)
+            : ['- (none selected)']),
+          '',
+          'Local combo library you MUST use:',
+          ...allowedRecipeLines.map((line) => `- ${line}`),
+          '',
+          'TASK: Suggest one day of simple, realistic meals from the local combo library that help reduce body fat while staying close to the daily calorie target.',
+          mode === 'video'
+            ? [
+                'Return a VIDEO SCRIPT plan, not a regular meal summary.',
+                'Use this exact structure:',
+                'Section 1 (no heading marks): "Video concept + timeline" with breakfast/lunch/dinner/snack and rough calories.',
+                'Section 2 heading: "### Shot list"',
+                'Section 3 heading: "### Voiceover script"',
+                'Section 4 heading: "### Search keywords"',
+                'In "Shot list", include 6-10 short shots total across the day.',
+                'In "Voiceover script", write short narration lines for each meal.',
+              ].join(' ')
+            : [
+                'Return a full RECIPE PLAN (not just dish names).',
+                'Use headings with "### Breakfast", "### Lunch", "### Dinner", "### Snacks".',
+                'For each meal include:',
+                '1) Dish name',
+                '2) Ingredients (4-8 bullet points with rough amounts)',
+                '3) Steps (3-6 short bullet points)',
+                '4) Estimated calories for that meal',
+                'At the end include a short daily total and 1-2 adjustment tips.',
+              ].join(' '),
+          mode === 'video'
+            ? 'Keep total output under ~320 words and practical.'
+            : 'Write practical home-cooking details. Target ~450-750 words so recipes include real ingredients and steps.',
         ].join('\n'),
         stream: false,
       }),
@@ -109,8 +159,46 @@ app.post('/api/recommend-meals', async (req, res) => {
 
     const data = await response.json()
     const text = typeof data?.response === 'string' ? data.response : JSON.stringify(data?.response)
+    let recommendation = text
 
-    res.json({ recommendation: text })
+    if (mode === 'video' && !hasVideoStructure(recommendation)) {
+      const rewriteResponse = await fetch('http://localhost:11434/api/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'gpt-oss:20b',
+          prompt: [
+            'Rewrite the following nutrition plan into strict video format.',
+            'Rules:',
+            '- Keep original food ideas and calories as much as possible.',
+            '- Return ONLY plain text (no markdown code fence).',
+            '- Structure:',
+            '1) Intro block (no heading marks): "Video concept + timeline"',
+            '2) Heading exactly: ### Shot list',
+            '3) Heading exactly: ### Voiceover script',
+            '4) Heading exactly: ### Search keywords',
+            '- Keep concise, around 180-280 words.',
+            '',
+            'Input text:',
+            recommendation,
+          ].join('\n'),
+          stream: false,
+        }),
+      })
+
+      if (rewriteResponse.ok) {
+        const rewriteData = await rewriteResponse.json()
+        const rewritten =
+          typeof rewriteData?.response === 'string'
+            ? rewriteData.response
+            : JSON.stringify(rewriteData?.response)
+        if (rewritten && hasVideoStructure(rewritten)) {
+          recommendation = rewritten
+        }
+      }
+    }
+
+    res.json({ recommendation })
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : 'Server error' })
   }
