@@ -625,6 +625,8 @@
   color: #0f172a;
   background: rgba(255, 255, 255, 0.92);
   transition: all 0.2s ease;
+  cursor: pointer;
+  text-align: left;
 }
 
 .bili-result-chip:hover {
@@ -632,6 +634,47 @@
   background: #eff6ff;
   border-color: rgba(59, 130, 246, 0.75);
   color: #1d4ed8;
+}
+
+.bili-result-chip.active {
+  background: rgba(59, 130, 246, 0.14);
+  border-color: rgba(59, 130, 246, 0.78);
+  color: #1d4ed8;
+}
+
+.bili-player-card {
+  margin-bottom: 0.75rem;
+  padding: 0.55rem;
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  border-radius: 0.75rem;
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.bili-player-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  margin-bottom: 0.45rem;
+}
+
+.bili-player-link {
+  font-size: 0.76rem;
+  color: #2563eb;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.bili-player-link:hover {
+  text-decoration: underline;
+}
+
+.bili-player-frame {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border: 0;
+  border-radius: 0.6rem;
+  background: #0f172a;
 }
 
 @keyframes wave-fill {
@@ -1244,6 +1287,21 @@
   background: #161b22;
   border-color: #58a6ff;
   color: #dbeafe;
+}
+
+.theme-dark .bili-result-chip.active {
+  background: rgba(88, 166, 255, 0.14);
+  border-color: #58a6ff;
+  color: #dbeafe;
+}
+
+.theme-dark .bili-player-card {
+  background: #0d1117;
+  border-color: #30363d;
+}
+
+.theme-dark .bili-player-link {
+  color: #58a6ff;
 }
 
 @media (max-width: 900px) {

@@ -84,6 +84,17 @@ function apiUrl(path: string) {
   return `${API_BASE_URL.replace(/\/+$/, '')}${path.startsWith('/') ? '' : '/'}${path}`
 }
 
+function extractBilibiliBvid(url: string): string | null {
+  const match = url.match(/\/video\/(BV[0-9A-Za-z]+)/i)
+  return match?.[1] ?? null
+}
+
+function toBilibiliEmbedUrl(url: string): string | null {
+  const bvid = extractBilibiliBvid(url)
+  if (!bvid) return null
+  return `https://player.bilibili.com/player.html?bvid=${encodeURIComponent(bvid)}&page=1`
+}
+
 function readCoachCache(): Record<string, { recommendation: string; timestamp: number }> {
   try {
     const raw = window.localStorage.getItem(COACH_CACHE_KEY)
@@ -482,6 +493,7 @@ function App() {
   const [coachVisible, setCoachVisible] = useState(true)
   const [coachMode, setCoachMode] = useState<CoachMode>('normal')
   const [selectedCombos, setSelectedCombos] = useState<string[]>([])
+  const [selectedBilibiliVideo, setSelectedBilibiliVideo] = useState<BilibiliRecipeResult | null>(null)
   const [cookRecipeRows, setCookRecipeRows] = useState<CookCsvRecipe[]>(COOK_RECIPE_SNAPSHOT)
   const [cookRecipeLoading, setCookRecipeLoading] = useState(false)
   const [cookRecipeError, setCookRecipeError] = useState<string | null>(null)
@@ -1009,6 +1021,10 @@ function App() {
     () => buildBilibiliRecipeResults(selectedCombos, cookRecipeRows),
     [selectedCombos, cookRecipeRows],
   )
+  const selectedBilibiliEmbedUrl = useMemo(
+    () => (selectedBilibiliVideo ? toBilibiliEmbedUrl(selectedBilibiliVideo.url) : null),
+    [selectedBilibiliVideo],
+  )
   const comboOptionsByCategory = useMemo(
     () =>
       COMBO_CATEGORY_ORDER.map((category) => ({
@@ -1018,6 +1034,20 @@ function App() {
       })),
     [],
   )
+
+  useEffect(() => {
+    if (coachMode !== 'video') {
+      setSelectedBilibiliVideo(null)
+      return
+    }
+    if (selectedCombos.length === 0 || bilibiliRecipeResults.length === 0) {
+      setSelectedBilibiliVideo(null)
+      return
+    }
+    setSelectedBilibiliVideo((current) =>
+      current && bilibiliRecipeResults.some((item) => item.id === current.id) ? current : null,
+    )
+  }, [coachMode, selectedCombos, bilibiliRecipeResults])
 
   if (authLoading) {
     return (
@@ -1501,7 +1531,7 @@ function App() {
                 {coachMode === 'video' && (
                   <p className="coach-video-hint">
                     Pick ingredients first. After you choose at least one item, matching Bilibili videos
-                    will appear here and open in a new tab.
+                    will appear here and play on this page.
                   </p>
                 )}
                 {coachError && <p className="form-error">{coachError}</p>}
@@ -1511,6 +1541,28 @@ function App() {
                 {coachMode === 'video' && selectedCombos.length > 0 && coachVisible && (
                   <div className="coach-advice">
                     <div className="coach-section">
+                      {selectedBilibiliVideo && selectedBilibiliEmbedUrl && (
+                        <div className="bili-player-card">
+                          <div className="bili-player-header">
+                            <p className="coach-title">{selectedBilibiliVideo.title}</p>
+                            <a
+                              className="bili-player-link"
+                              href={selectedBilibiliVideo.url}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              Open on Bilibili
+                            </a>
+                          </div>
+                          <iframe
+                            className="bili-player-frame"
+                            src={selectedBilibiliEmbedUrl}
+                            title={selectedBilibiliVideo.title}
+                            loading="lazy"
+                            allowFullScreen
+                          />
+                        </div>
+                      )}
                       <p className="coach-title">
                         Matching Bilibili recipes ({bilibiliRecipeResults.length})
                       </p>
@@ -1519,16 +1571,17 @@ function App() {
                       ) : bilibiliRecipeResults.length > 0 ? (
                         <div className="bili-result-grid">
                           {bilibiliRecipeResults.map((item) => (
-                            <a
+                            <button
                               key={item.id}
-                              className="bili-result-chip"
-                              href={item.url}
-                              target="_blank"
-                              rel="noreferrer"
-                              title={`Open Bilibili page: ${item.title}`}
+                              type="button"
+                              className={`bili-result-chip ${
+                                selectedBilibiliVideo?.id === item.id ? 'active' : ''
+                              }`}
+                              onClick={() => setSelectedBilibiliVideo(item)}
+                              title={`Play on page: ${item.title}`}
                             >
                               <span aria-hidden="true">🎬</span> {item.title}
-                            </a>
+                            </button>
                           ))}
                         </div>
                       ) : (
