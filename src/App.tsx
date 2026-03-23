@@ -1,6 +1,7 @@
 import './App.css'
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { Login, type AuthUser } from './Login'
+import { FitnessDemoPanel } from './FitnessDemoPanel'
 import { auth, db, firebaseConfigError } from './firebase-config'
 import { COOK_COMBO_OPTIONS, type ComboCategory } from './data/comboLibrary'
 import { BILIBILI_RECIPE_LIBRARY, type BilibiliRecipeResult } from './data/bilibiliLibrary'
@@ -34,6 +35,7 @@ type MealCategory = 'breakfast' | 'lunch' | 'dinner' | 'snack'
 
 type Theme = 'light' | 'dark'
 type CoachMode = 'normal' | 'video'
+type AppSection = 'calendar' | 'profile' | 'log' | 'fitness' | 'videos' | 'coach'
 
 const THEME_KEY = 'foodLogTheme'
 
@@ -492,6 +494,7 @@ function App() {
   const [coachError, setCoachError] = useState<string | null>(null)
   const [coachVisible, setCoachVisible] = useState(true)
   const [coachMode, setCoachMode] = useState<CoachMode>('normal')
+  const [appSection, setAppSection] = useState<AppSection>('calendar')
   const [selectedCombos, setSelectedCombos] = useState<string[]>([])
   const [selectedBilibiliVideo, setSelectedBilibiliVideo] = useState<BilibiliRecipeResult | null>(null)
   const [cookRecipeRows, setCookRecipeRows] = useState<CookCsvRecipe[]>(COOK_RECIPE_SNAPSHOT)
@@ -513,6 +516,7 @@ function App() {
 
   const [entriesLoading, setEntriesLoading] = useState(true)
   const [entries, setEntries] = useState<FoodEntry[]>([])
+  const [caloriesByDateKey, setCaloriesByDateKey] = useState<Record<string, number>>({})
   const [entriesError, setEntriesError] = useState<string | null>(null)
   const [saveEntryError, setSaveEntryError] = useState<string | null>(null)
   const [saveEntryLoading, setSaveEntryLoading] = useState(false)
@@ -534,6 +538,11 @@ function App() {
   }, [theme])
 
   useEffect(() => {
+    if (appSection === 'coach') setCoachMode('normal')
+    if (appSection === 'videos') setCoachMode('video')
+  }, [appSection])
+
+  useEffect(() => {
     if (coachMode !== 'video') return
 
     let cancelled = false
@@ -547,11 +556,13 @@ function App() {
       })
       .catch((err) => {
         if (cancelled) return
-        if (!cookRecipeRows.length) {
+        setCookRecipeRows((current) => {
+          if (current.length > 0) return current
           setCookRecipeError(
             err instanceof Error ? err.message : 'Failed to import recipe videos from cook data.',
           )
-        }
+          return current
+        })
       })
 
     return () => {
@@ -682,6 +693,7 @@ function App() {
   useEffect(() => {
     if (!userId) {
       setEntries([])
+      setCaloriesByDateKey({})
       setEntriesLoading(false)
       setEntriesError(null)
       return
@@ -721,6 +733,13 @@ function App() {
           }
           return { entry, dateKey, createdAtMillis }
         })
+        const totals: Record<string, number> = {}
+        for (const x of next) {
+          if (!x.entry.name || !x.dateKey) continue
+          totals[x.dateKey] = (totals[x.dateKey] ?? 0) + x.entry.calories
+        }
+        setCaloriesByDateKey(totals)
+
         const filtered = next
           .filter((x) => x.entry.name && x.dateKey === selectedDate)
           .sort((a, b) => a.createdAtMillis - b.createdAtMillis)
@@ -797,6 +816,7 @@ function App() {
     if (!day) return
     const date = new Date(currentYear, currentMonth, day)
     setSelectedDate(formatDateKey(date))
+    setAppSection('log')
   }
 
   const handleAddEntry = async (event: FormEvent<HTMLFormElement>) => {
@@ -976,6 +996,26 @@ function App() {
     () => buildCalendar(currentYear, currentMonth),
     [currentYear, currentMonth],
   )
+
+  const monthGoalRows = useMemo(() => {
+    const daysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate()
+    const rows: {
+      day: number
+      dateKey: string
+      calories: number
+      percent: number | null
+    }[] = []
+    for (let d = 1; d <= daysInMonth; d += 1) {
+      const dateKey = formatDateKey(new Date(currentYear, currentMonth, d))
+      const calories = caloriesByDateKey[dateKey] ?? 0
+      const percent =
+        dailyCalorieNeed && dailyCalorieNeed > 0
+          ? Math.round((calories / dailyCalorieNeed) * 100)
+          : null
+      rows.push({ day: d, dateKey, calories, percent })
+    }
+    return rows
+  }, [currentYear, currentMonth, caloriesByDateKey, dailyCalorieNeed])
 
   const applyPickerSelection = () => {
     if (!Number.isFinite(pickerYear) || pickerYear <= 0) {
@@ -1207,8 +1247,8 @@ function App() {
           <div>
             <h1>Food Log Calendar</h1>
             <p className="app-subtitle">
-              Click a date on the calendar to view or edit that day&apos;s food log. Data is stored in
-              the cloud for your account.
+              Use the tabs below to switch between Calendar, Profile, Food log, Recipe videos, and AI
+              coach. Your data is stored in the cloud for your account.
             </p>
           </div>
           <div className="app-header-user">
@@ -1233,7 +1273,30 @@ function App() {
         </div>
       </header>
 
-      <main className="app-layout">
+      <main className="app-main">
+        <nav className="app-section-nav" aria-label="App sections">
+          {(
+            [
+              ['calendar', 'Calendar'],
+              ['profile', 'Profile'],
+              ['log', 'Food log'],
+              ['fitness', 'Fitness (demo)'],
+              ['videos', 'Recipe videos'],
+              ['coach', 'AI coach'],
+            ] as const
+          ).map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              className={`section-nav-button${appSection === id ? ' active' : ''}`}
+              onClick={() => setAppSection(id)}
+            >
+              {label}
+            </button>
+          ))}
+        </nav>
+        <div className="app-section-content">
+          {appSection === 'calendar' && (
         <section className="calendar-card" aria-label="Calendar">
           <div className="calendar-header">
             <button type="button" onClick={onPrevMonth} className="nav-button">
@@ -1312,6 +1375,18 @@ function App() {
                     currentMonth === today.getMonth() &&
                     currentYear === today.getFullYear()
 
+                  const dayCals = caloriesByDateKey[dateKey] ?? 0
+                  const dayGoalPctRaw =
+                    dailyCalorieNeed && dailyCalorieNeed > 0
+                      ? Math.round((dayCals / dailyCalorieNeed) * 100)
+                      : null
+                  const dayBarWidth =
+                    dayGoalPctRaw != null ? Math.min(100, Math.max(0, dayGoalPctRaw)) : 0
+                  const dayAtOrOver =
+                    dailyCalorieNeed && dailyCalorieNeed > 0
+                      ? dayCals >= dailyCalorieNeed
+                      : false
+
                   return (
                     <button
                       key={dayIndex}
@@ -1321,17 +1396,85 @@ function App() {
                       }`}
                       onClick={() => handleSelectDate(day)}
                       aria-pressed={isSelected}
+                      aria-label={
+                        dayGoalPctRaw != null
+                          ? `${day} ${getMonthLabel(currentYear, currentMonth)}, ${dayGoalPctRaw}% of daily calorie goal`
+                          : undefined
+                      }
                     >
                       <span className="day-number">{day}</span>
+                      {dailyCalorieNeed && dailyCalorieNeed > 0 ? (
+                        <div className="day-goal-meter">
+                          <div className="day-goal-bar-track">
+                            <div
+                              className={`day-goal-bar-fill ${dayAtOrOver ? 'full' : ''}`}
+                              style={{ width: `${dayBarWidth}%` }}
+                            />
+                          </div>
+                          <span
+                            className={`day-goal-pct-label ${dayAtOrOver ? 'at-or-over' : ''}`}
+                          >
+                            {dayGoalPctRaw}%
+                          </span>
+                        </div>
+                      ) : null}
                     </button>
                   )
                 })}
               </div>
             ))}
           </div>
-        </section>
 
-        <section className="log-card" aria-label="Food log">
+          <div className="month-goal-subview" aria-label="Daily calorie goal progress this month">
+            <h3 className="month-goal-subview-title">Goal reach by day</h3>
+            {!dailyCalorieNeed ? (
+              <p className="month-goal-subview-hint">
+                Set your daily calorie target in <strong>Profile</strong> to see each day&apos;s
+                percentage of goal.
+              </p>
+            ) : (
+              <>
+                <p className="month-goal-subview-caption">
+                  {getMonthLabel(currentYear, currentMonth)} · target{' '}
+                  <strong>{dailyCalorieNeed.toLocaleString()}</strong> kcal/day · tap a row to open
+                  that day in Food log
+                </p>
+                <div className="month-goal-day-list" role="list">
+                  {monthGoalRows.map(({ day, dateKey, calories, percent }) => {
+                    const pct = percent ?? 0
+                    const barWidth = Math.min(100, Math.max(0, pct))
+                    return (
+                      <button
+                        key={dateKey}
+                        type="button"
+                        role="listitem"
+                        className={`month-goal-day-row ${dateKey === selectedDate ? 'selected' : ''}`}
+                        onClick={() => {
+                          setSelectedDate(dateKey)
+                          setAppSection('log')
+                        }}
+                      >
+                        <span className="month-goal-day-label">{day}</span>
+                        <div className="month-goal-day-bar-track" aria-hidden="true">
+                          <div
+                            className={`month-goal-day-bar-fill ${pct >= 100 ? 'full' : ''}`}
+                            style={{ width: `${barWidth}%` }}
+                          />
+                        </div>
+                        <span className="month-goal-day-pct">{percent != null ? `${pct}%` : '—'}</span>
+                        <span className="month-goal-day-cal">{calories.toLocaleString()} cal</span>
+                      </button>
+                    )
+                  })}
+                </div>
+              </>
+            )}
+          </div>
+        </section>
+          )}
+
+          {appSection === 'profile' && (
+        <section className="log-card" aria-label="Daily calorie estimate">
           <section className="profile-section" aria-label="Daily calorie estimate">
             <h2 className="profile-title">Daily calorie estimate</h2>
             <p className="profile-caption">
@@ -1411,7 +1554,11 @@ function App() {
               </div>
             </form>
           </section>
+        </section>
+          )}
 
+          {appSection === 'log' && (
+        <section className="log-card" aria-label="Food log">
           <h2 className="log-title">{selectedDateLabel}</h2>
 
           <div className="calorie-progress">
@@ -1462,162 +1609,10 @@ function App() {
                     )
                   })}
                 </div>
-
-                <div className="combo-picker" aria-label="Choose preferred recipe combinations">
-                  <p className="combo-title">Choose ingredient combos</p>
-                  <div className="combo-groups">
-                    {comboOptionsByCategory.map((group) => (
-                      <div key={group.category} className="combo-group">
-                        <p className="combo-group-title">{group.label}</p>
-                        <div className="combo-tags">
-                          {group.options.map((option) => {
-                            const active = selectedCombos.includes(option.id)
-                            return (
-                              <button
-                                key={option.id}
-                                type="button"
-                                className={`combo-tag ${active ? 'active' : ''}`}
-                                onClick={() => toggleCombo(option.id)}
-                                aria-pressed={active}
-                              >
-                                <span aria-hidden="true">{option.icon}</span> {option.label}
-                              </button>
-                            )
-                          })}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="coach-row">
-                  <select
-                    className="log-input coach-mode-select"
-                    value={coachMode}
-                    onChange={(e) => {
-                      const nextMode = e.target.value === 'video' ? 'video' : 'normal'
-                      setCoachMode(nextMode)
-                      setCoachError(null)
-                      setCoachAdvice(null)
-                      setCoachVisible(true)
-                    }}
-                    title="Choose AI coach output mode"
-                  >
-                    <option value="normal">Normal recipe plan</option>
-                    <option value="video">Bilibili recipe videos</option>
-                  </select>
-                  {coachMode === 'normal' && (
-                    <button
-                      type="button"
-                      className="secondary-button small"
-                      onClick={() => void handleAskCoach()}
-                      disabled={coachLoading}
-                    >
-                      {coachLoading ? 'Asking coach…' : 'Ask AI coach'}
-                    </button>
-                  )}
-                  {(coachMode === 'normal'
-                    ? Boolean(coachAdvice)
-                    : selectedCombos.length > 0 && bilibiliRecipeResults.length > 0) && (
-                    <button
-                      type="button"
-                      className="secondary-button small"
-                      onClick={() => setCoachVisible((v) => !v)}
-                    >
-                      {coachVisible ? 'Hide results' : 'Show results'}
-                    </button>
-                  )}
-                </div>
-                {coachMode === 'video' && (
-                  <p className="coach-video-hint">
-                    Pick ingredients first. After you choose at least one item, matching Bilibili videos
-                    will appear here and play on this page.
-                  </p>
-                )}
-                {coachError && <p className="form-error">{coachError}</p>}
-                {coachMode === 'video' && selectedCombos.length > 0 && cookRecipeError && (
-                  <p className="form-error">{cookRecipeError}</p>
-                )}
-                {coachMode === 'video' && selectedCombos.length > 0 && coachVisible && (
-                  <div className="coach-advice">
-                    <div className="coach-section">
-                      {selectedBilibiliVideo && selectedBilibiliEmbedUrl && (
-                        <div className="bili-player-card">
-                          <div className="bili-player-header">
-                            <p className="coach-title">{selectedBilibiliVideo.title}</p>
-                            <a
-                              className="bili-player-link"
-                              href={selectedBilibiliVideo.url}
-                              target="_blank"
-                              rel="noreferrer"
-                            >
-                              Open on Bilibili
-                            </a>
-                          </div>
-                          <iframe
-                            className="bili-player-frame"
-                            src={selectedBilibiliEmbedUrl}
-                            title={selectedBilibiliVideo.title}
-                            loading="lazy"
-                            allowFullScreen
-                          />
-                        </div>
-                      )}
-                      <p className="coach-title">
-                        Matching Bilibili recipes ({bilibiliRecipeResults.length})
-                      </p>
-                      {cookRecipeLoading ? (
-                        <p className="coach-video-hint">Importing recipe videos from cook data…</p>
-                      ) : bilibiliRecipeResults.length > 0 ? (
-                        <div className="bili-result-grid">
-                          {bilibiliRecipeResults.map((item) => (
-                            <button
-                              key={item.id}
-                              type="button"
-                              className={`bili-result-chip ${
-                                selectedBilibiliVideo?.id === item.id ? 'active' : ''
-                              }`}
-                              onClick={() => setSelectedBilibiliVideo(item)}
-                              title={`Play on page: ${item.title}`}
-                            >
-                              <span aria-hidden="true">🎬</span> {item.title}
-                            </button>
-                          ))}
-                        </div>
-                      ) : (
-                        <p className="coach-video-hint">
-                          No matching Bilibili videos found for the selected combo in imported cook data.
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                )}
-                {coachMode === 'normal' && coachAdvice && coachVisible && (() => {
-
-                  const adviceText = coachAdvice ?? ''
-                  const parts = adviceText.split('###')
-                  const mainPlan = parts[0]?.trim() ?? ''
-                  const tipsBlock =
-                    parts.length > 1 ? `###${parts.slice(1).join('###')}`.trim() : ''
-                  return (
-                    <div className="coach-advice">
-                      <div className="coach-section">
-                        <p className="coach-title">Suggested plan for fat loss</p>
-                        <pre className="coach-text">{mainPlan}</pre>
-                      </div>
-                      {tipsBlock && (
-                        <div className="coach-section">
-                          <p className="coach-title">Coach tips for the day</p>
-                          <pre className="coach-text">{tipsBlock}</pre>
-                        </div>
-                      )}
-                    </div>
-                  )
-                })()}
               </>
             ) : (
               <p className="calorie-progress-hint">
-                Set your daily calorie estimate above to see your progress bar.
+                Set your daily calorie estimate in <strong>Profile</strong> to see your progress bar.
               </p>
             )}
           </div>
@@ -1828,6 +1823,186 @@ function App() {
             </ul>
           )}
         </section>
+          )}
+
+          {appSection === 'fitness' && (
+            <FitnessDemoPanel
+              selectedDate={selectedDate}
+              selectedDateLabel={selectedDateLabel}
+              onSelectDate={setSelectedDate}
+              userWeightKg={
+                profileDoc && profileDoc.weightKg > 0 ? profileDoc.weightKg : null
+              }
+              apiBaseUrl={API_BASE_URL}
+              userProfile={profileDoc}
+            />
+          )}
+
+          {appSection === 'videos' && (
+        <section className="log-card" aria-label="Recipe videos">
+          <h2 className="log-title">Recipe videos (Bilibili)</h2>
+          <p className="profile-caption">
+            Pick ingredients by category, then choose a video to play on this page.
+          </p>
+          <div className="combo-picker" aria-label="Choose preferred recipe combinations">
+            <p className="combo-title">Choose ingredient combos</p>
+            <div className="combo-groups">
+              {comboOptionsByCategory.map((group) => (
+                <div key={group.category} className="combo-group">
+                  <p className="combo-group-title">{group.label}</p>
+                  <div className="combo-tags">
+                    {group.options.map((option) => {
+                      const active = selectedCombos.includes(option.id)
+                      return (
+                        <button
+                          key={option.id}
+                          type="button"
+                          className={`combo-tag ${active ? 'active' : ''}`}
+                          onClick={() => toggleCombo(option.id)}
+                          aria-pressed={active}
+                        >
+                          <span aria-hidden="true">{option.icon}</span> {option.label}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+          <p className="coach-video-hint">
+            Pick at least one item to see matching videos. Click a result to play on this page.
+          </p>
+          {cookRecipeError && <p className="form-error">{cookRecipeError}</p>}
+          {selectedCombos.length > 0 && coachVisible && (
+            <div className="coach-advice">
+              <div className="coach-section">
+                {selectedBilibiliVideo && selectedBilibiliEmbedUrl && (
+                  <div className="bili-player-card">
+                    <div className="bili-player-header">
+                      <p className="coach-title">{selectedBilibiliVideo.title}</p>
+                      <a
+                        className="bili-player-link"
+                        href={selectedBilibiliVideo.url}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        Open on Bilibili
+                      </a>
+                    </div>
+                    <iframe
+                      className="bili-player-frame"
+                      src={selectedBilibiliEmbedUrl}
+                      title={selectedBilibiliVideo.title}
+                      loading="lazy"
+                      allowFullScreen
+                    />
+                  </div>
+                )}
+                <p className="coach-title">Matching Bilibili recipes ({bilibiliRecipeResults.length})</p>
+                {cookRecipeLoading ? (
+                  <p className="coach-video-hint">Importing recipe videos from cook data…</p>
+                ) : bilibiliRecipeResults.length > 0 ? (
+                  <div className="bili-result-grid">
+                    {bilibiliRecipeResults.map((item) => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        className={`bili-result-chip ${
+                          selectedBilibiliVideo?.id === item.id ? 'active' : ''
+                        }`}
+                        onClick={() => setSelectedBilibiliVideo(item)}
+                        title={`Play on page: ${item.title}`}
+                      >
+                        <span aria-hidden="true">🎬</span> {item.title}
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="coach-video-hint">
+                    No matching Bilibili videos found for the selected combo in imported cook data.
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+          {selectedCombos.length > 0 && bilibiliRecipeResults.length > 0 && (
+            <div className="coach-row" style={{ marginTop: '0.75rem' }}>
+              <button
+                type="button"
+                className="secondary-button small"
+                onClick={() => setCoachVisible((v) => !v)}
+              >
+                {coachVisible ? 'Hide results' : 'Show results'}
+              </button>
+            </div>
+          )}
+        </section>
+          )}
+
+          {appSection === 'coach' && (
+        <section className="log-card" aria-label="AI coach">
+          <h2 className="log-title">AI coach</h2>
+          <p className="profile-caption">
+            Get a detailed daily recipe plan based on your profile and today&apos;s log. Set calories in{' '}
+            <strong>Profile</strong> first.
+          </p>
+          {dailyCalorieNeed ? (
+            <>
+              <div className="calorie-progress-header" style={{ marginBottom: '0.5rem' }}>
+                <span className="calorie-progress-label">Today</span>
+                <span className="calorie-progress-value">
+                  {totalCaloriesForDay.toLocaleString()} / {dailyCalorieNeed.toLocaleString()} kcal
+                </span>
+              </div>
+              <div className="coach-row">
+                <button
+                  type="button"
+                  className="secondary-button small"
+                  onClick={() => void handleAskCoach()}
+                  disabled={coachLoading}
+                >
+                  {coachLoading ? 'Asking coach…' : 'Ask AI coach'}
+                </button>
+                {coachAdvice && (
+                  <button
+                    type="button"
+                    className="secondary-button small"
+                    onClick={() => setCoachVisible((v) => !v)}
+                  >
+                    {coachVisible ? 'Hide plan' : 'Show plan'}
+                  </button>
+                )}
+              </div>
+              {coachError && <p className="form-error">{coachError}</p>}
+              {coachAdvice && coachVisible && (() => {
+                const adviceText = coachAdvice ?? ''
+                const parts = adviceText.split('###')
+                const mainPlan = parts[0]?.trim() ?? ''
+                const tipsBlock =
+                  parts.length > 1 ? `###${parts.slice(1).join('###')}`.trim() : ''
+                return (
+                  <div className="coach-advice" style={{ marginTop: '0.75rem' }}>
+                    <div className="coach-section">
+                      <p className="coach-title">Suggested plan for fat loss</p>
+                      <pre className="coach-text">{mainPlan}</pre>
+                    </div>
+                    {tipsBlock && (
+                      <div className="coach-section">
+                        <p className="coach-title">Coach tips for the day</p>
+                        <pre className="coach-text">{tipsBlock}</pre>
+                      </div>
+                    )}
+                  </div>
+                )
+              })()}
+            </>
+          ) : (
+            <p className="calorie-progress-hint">Open the Profile tab and calculate your daily calories first.</p>
+          )}
+        </section>
+          )}
+        </div>
       </main>
     </div>
   )
