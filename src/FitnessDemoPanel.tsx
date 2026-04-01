@@ -32,8 +32,6 @@ export type DemoExercise = {
 }
 
 const STORAGE_KEY = 'fitnessDemoLogByDate'
-const XP_PER_EXERCISE = 15
-const XP_PER_MINUTE = 2
 
 const CATEGORY_ORDER: ExerciseCategory[] = [
   'cardio', 'strength', 'flexibility', 'sports', 'recovery', 'other',
@@ -427,7 +425,8 @@ export function FitnessDemoPanel({ selectedDate, selectedDateLabel, onSelectDate
   const totalMinutes = entries.reduce((s, e) => s + e.minutes, 0)
   const totalCalories = entries.reduce((s, e) => s + e.caloriesBurned, 0)
   const doneCount = entries.filter((e) => e.done).length
-  const xpToday = entries.length * XP_PER_EXERCISE + totalMinutes * XP_PER_MINUTE
+  const completionRate = entries.length > 0 ? Math.round((doneCount / entries.length) * 100) : 0
+  const avgCaloriesPerExercise = entries.length > 0 ? Math.round(totalCalories / entries.length) : 0
 
   const allBodyPartsToday = useMemo(() => {
     const s = new Set<string>()
@@ -448,58 +447,67 @@ export function FitnessDemoPanel({ selectedDate, selectedDateLabel, onSelectDate
 
   return (
     <section className="ft-panel log-card" aria-label="Fitness exercises">
-      {/* ── Banner ── */}
       <div className="ft-banner">
         <span className="ft-badge">Demo</span>
         <span>Local only · Calorie burns are estimates</span>
       </div>
 
-      {/* ── Hero header ── */}
-      <div className="ft-hero">
-        <div className="ft-hero-left">
-          <h2 className="ft-hero-title">{selectedDateLabel}</h2>
-          <p className="ft-hero-subtitle">
-            {userWeightKg && userWeightKg > 0
-              ? <>Using <strong>{Math.round(userWeightKg * 2.20462)} lb</strong> body weight</>
-              : <>Set weight in <strong>Profile</strong> for better estimates</>}
-          </p>
-          <label className="ft-date-field">
-            <input className="log-input" type="date" value={selectedDate} onChange={(e) => onSelectDate(e.target.value)} />
-          </label>
+      <div className="ft-overview-panel">
+        <div className="ft-hero">
+          <div className="ft-hero-left">
+            <p className="ft-panel-kicker">Workout overview</p>
+            <h2 className="ft-hero-title">{selectedDateLabel}</h2>
+            <p className="ft-hero-subtitle">
+              {userWeightKg && userWeightKg > 0
+                ? <>Using <strong>{Math.round(userWeightKg * 2.20462)} lb</strong> body weight for calorie estimates</>
+                : <>Set weight in <strong>Profile</strong> for better calorie estimates</>}
+            </p>
+            <label className="ft-date-field">
+              <input className="log-input" type="date" value={selectedDate} onChange={(e) => onSelectDate(e.target.value)} />
+            </label>
+          </div>
+          <BodyMap highlight={allBodyPartsToday} className="ft-hero-body-map" />
         </div>
-        <BodyMap highlight={allBodyPartsToday} className="ft-hero-body-map" />
+
+        <div className="ft-stats-row">
+          <div className="ft-stat-card">
+            <span className="ft-stat-value">{entries.length}</span>
+            <span className="ft-stat-label">Exercises</span>
+            <span className="ft-stat-note">Logged for this day</span>
+          </div>
+          <div className="ft-stat-card">
+            <span className="ft-stat-value">{completionRate}%</span>
+            <span className="ft-stat-label">Completion</span>
+            <span className="ft-stat-note">{doneCount} finished</span>
+          </div>
+          <div className="ft-stat-card">
+            <span className="ft-stat-value">{totalMinutes}</span>
+            <span className="ft-stat-label">Minutes</span>
+            <span className="ft-stat-note">Total active time</span>
+          </div>
+          <div className="ft-stat-card">
+            <span className="ft-stat-value">{totalCalories}</span>
+            <span className="ft-stat-label">kcal burned</span>
+            <span className="ft-stat-note">
+              {entries.length > 0 ? `~${avgCaloriesPerExercise} avg / workout` : 'Adds up as you log'}
+            </span>
+          </div>
+          <div className="ft-stat-card">
+            <span className="ft-stat-value">{muscleGroupCount}</span>
+            <span className="ft-stat-label">Muscles hit</span>
+            <span className="ft-stat-note">Unique target areas</span>
+          </div>
+        </div>
       </div>
 
-      {/* ── Stat cards row ── */}
-      <div className="ft-stats-row">
-        <div className="ft-stat-card ft-stat-xp">
-          <span className="ft-stat-value">{xpToday}</span>
-          <span className="ft-stat-label">XP earned</span>
+      <div className="ft-ai-section ft-section-card">
+        <div className="ft-section-head">
+          <div>
+            <p className="ft-panel-kicker">Smart planning</p>
+            <h3 className="ft-section-title">Suggested workout builder</h3>
+          </div>
+          <p className="ft-section-note">Choose target areas and get quick ideas for this day.</p>
         </div>
-        <div className="ft-stat-card">
-          <span className="ft-stat-value">{entries.length}</span>
-          <span className="ft-stat-label">Exercises</span>
-        </div>
-        <div className="ft-stat-card">
-          <span className="ft-stat-value">{doneCount}/{entries.length}</span>
-          <span className="ft-stat-label">Completed</span>
-        </div>
-        <div className="ft-stat-card">
-          <span className="ft-stat-value">{totalMinutes}</span>
-          <span className="ft-stat-label">Minutes</span>
-        </div>
-        <div className="ft-stat-card">
-          <span className="ft-stat-value">{totalCalories}</span>
-          <span className="ft-stat-label">kcal burned</span>
-        </div>
-        <div className="ft-stat-card">
-          <span className="ft-stat-value">{muscleGroupCount}</span>
-          <span className="ft-stat-label">Muscles hit</span>
-        </div>
-      </div>
-
-      {/* ── AI Workout Suggestion ── */}
-      <div className="ft-ai-section">
         <button type="button" className={`ft-ai-toggle ${showAiPanel ? 'open' : ''}`} onClick={() => setShowAiPanel((v) => !v)}>
           <span className="ft-ai-toggle-icon">🤖</span>
           <span>AI exercise suggestion</span>
@@ -569,165 +577,188 @@ export function FitnessDemoPanel({ selectedDate, selectedDateLabel, onSelectDate
         ) : null}
       </div>
 
-      {/* ── Category breakdown ── */}
-      <div className="ft-categories">
-        {CATEGORY_ORDER.map((cat) => {
-          const meta = CATEGORY_META[cat]
-          const s = categorySummary[cat]
-          if (s.count === 0) return null
-          const pct = totalCalories > 0 ? Math.round((s.calories / totalCalories) * 100) : 0
-          return (
-            <div key={cat} className="ft-cat-bar" style={{ '--cat-color': meta.color } as React.CSSProperties}>
-              <div className="ft-cat-bar-header">
-                <span className="ft-cat-bar-icon">{meta.emoji}</span>
-                <span className="ft-cat-bar-name">{meta.label}</span>
-                <span className="ft-cat-bar-detail">{s.count} · {s.minutes} min · {s.calories} kcal</span>
-              </div>
-              <div className="ft-cat-bar-track">
-                <div className="ft-cat-bar-fill" style={{ width: `${Math.max(4, pct)}%` }} />
-              </div>
-            </div>
-          )
-        })}
-      </div>
-
-      {/* ── Add exercise toggle ── */}
-      {!showForm ? (
-        <button type="button" className="ft-add-btn" onClick={() => setShowForm(true)}>
-          + Add exercise
-        </button>
-      ) : (
-        <form className="ft-form" onSubmit={addExercise}>
-          <div className="ft-form-header">
-            <h3 className="ft-form-title">Log exercise</h3>
-            <button type="button" className="ft-form-close" onClick={() => setShowForm(false)} aria-label="Close">✕</button>
+      <div className="ft-section-card">
+        <div className="ft-section-head">
+          <div>
+            <p className="ft-panel-kicker">Analysis</p>
+            <h3 className="ft-section-title">Workout balance</h3>
           </div>
-
-          <label className="field">
-            <span className="field-label">Exercise</span>
-            <select className="log-input month-select" value={pickId} onChange={(e) => { setPickId(e.target.value); setFormError(null); const v = e.target.value; if (v && v !== '__custom__') { const d = getExerciseById(v); if (d) setCustomCategory(d.category) } }}>
-              <option value="">— Choose exercise —</option>
-              {CATEGORY_ORDER.map((cat) => {
-                const items = EXERCISE_LIBRARY.filter((ex) => ex.category === cat)
-                if (!items.length) return null
-                return (
-                  <optgroup key={cat} label={`${CATEGORY_META[cat].emoji} ${CATEGORY_META[cat].label}`}>
-                    {items.map((ex) => <option key={ex.id} value={ex.id}>{ex.iconEmoji} {ex.name}</option>)}
-                  </optgroup>
-                )
-              })}
-              <option value="__custom__">✏️ Custom exercise…</option>
-            </select>
-          </label>
-
-          {/* Exercise preview card */}
-          {pickId ? (
-            <div className="ft-exercise-preview">
-              <div className="ft-preview-visual">
-                <div className="ft-preview-img-wrap">
-                  <img src={pendingPhoto ?? (selectedDef?.imageUrl ?? CATEGORY_EXERCISE_IMAGE[customCategory])} alt="" className="ft-preview-img" />
-                  <span className="ft-preview-emoji">{selectedDef?.iconEmoji ?? CATEGORY_META[customCategory].emoji}</span>
-                </div>
-                {selectedDef ? <BodyMap highlight={selectedDef.bodyParts} className="ft-preview-bodymap" /> : null}
-              </div>
-              {selectedDef ? (
-                <div className="ft-preview-tags">
-                  {selectedDef.bodyParts.map((p) => <span key={p} className="ft-bp-tag">{p}</span>)}
-                </div>
-              ) : null}
-            </div>
-          ) : null}
-
-          {pickId === '__custom__' ? (
-            <div className="ft-custom-fields">
-              <label className="field"><span className="field-label">Custom name</span><input className="log-input" type="text" placeholder="e.g. Cable crossover" value={customName} onChange={(e) => setCustomName(e.target.value)} /></label>
-              <label className="field"><span className="field-label">Category</span>
-                <select className="log-input month-select" value={customCategory} onChange={(e) => setCustomCategory(e.target.value as ExerciseCategory)}>
-                  {CATEGORY_ORDER.map((cat) => <option key={cat} value={cat}>{CATEGORY_META[cat].emoji} {CATEGORY_META[cat].label}</option>)}
-                </select>
-              </label>
-              <fieldset className="ft-bp-fieldset">
-                <legend className="field-label">Body areas</legend>
-                <div className="ft-bp-grid">
-                  {CUSTOM_BODY_PART_OPTIONS.map((part) => (
-                    <label key={part} className="ft-bp-check">
-                      <input type="checkbox" checked={customBodyParts.includes(part)} onChange={() => toggleBodyPart(part)} />{part}
-                    </label>
-                  ))}
-                </div>
-              </fieldset>
-            </div>
-          ) : null}
-
-          <div className="ft-inputs-row">
-            {showLiftFields ? (
-              <>
-                <label className="field"><span className="field-label">Weight (lb)</span><input className="log-input" type="number" min={0} step={0.5} placeholder="135" value={newWeightLb} onChange={(e) => setNewWeightLb(e.target.value === '' ? '' : Number(e.target.value))} /></label>
-                <label className="field"><span className="field-label">Reps</span><input className="log-input" type="number" min={0} step={1} value={newReps} onChange={(e) => setNewReps(e.target.value === '' ? '' : Math.round(Number(e.target.value)))} /></label>
-                <label className="field"><span className="field-label">Sets</span><input className="log-input" type="number" min={0} step={1} value={newSets} onChange={(e) => setNewSets(e.target.value === '' ? '' : Math.round(Number(e.target.value)))} /></label>
-              </>
-            ) : null}
-            <label className="field"><span className="field-label">Minutes</span><input className="log-input" type="number" min={0} step={1} placeholder="30" value={newMinutes} onChange={(e) => setNewMinutes(e.target.value === '' ? '' : Number(e.target.value))} /></label>
-          </div>
-
-          <label className="field ft-photo-field">
-            <span className="field-label">Photo (optional)</span>
-            <input className="file-input" type="file" accept="image/*" onChange={async (ev) => { const file = ev.target.files?.[0]; ev.target.value = ''; if (!file) return; const d = await resizeImageFileToJpegDataUrl(file); if (d) setPendingPhoto(d) }} />
-            {pendingPhoto ? <button type="button" className="secondary-button ft-photo-rm" onClick={() => setPendingPhoto(null)}>Remove photo</button> : null}
-          </label>
-
-          <div className="ft-kcal-preview" aria-live="polite">
-            {previewCalories == null ? 'Pick an exercise to see estimated burn' : <>Est. burn: <strong>{previewCalories}</strong> kcal</>}
-          </div>
-
-          {formError ? <p className="ft-form-error">{formError}</p> : null}
-          <button type="submit" className="primary-button ft-submit">Add to this day</button>
-        </form>
-      )}
-
-      {/* ── Exercise cards ── */}
-      {entries.length === 0 ? (
-        <p className="ft-empty">No exercises logged for this day yet.</p>
-      ) : (
-        <ul className="ft-exercise-list">
-          {entries.map((e) => {
-            const meta = CATEGORY_META[e.category]
-            const parts = e.bodyParts.length ? e.bodyParts.join(' · ') : '—'
-            const liftBit = e.weightLb != null && e.weightLb > 0 && e.repsPerSet && e.sets
-              ? `${e.weightLb} lb × ${e.repsPerSet} × ${e.sets}`
-              : e.repsPerSet && e.sets ? `${e.repsPerSet} × ${e.sets}` : null
-            const exXp = XP_PER_EXERCISE + e.minutes * XP_PER_MINUTE
+          <p className="ft-section-note">See where your time and calorie burn are concentrated.</p>
+        </div>
+        <div className="ft-categories">
+          {CATEGORY_ORDER.map((cat) => {
+            const meta = CATEGORY_META[cat]
+            const s = categorySummary[cat]
+            if (s.count === 0) return null
+            const pct = totalCalories > 0 ? Math.round((s.calories / totalCalories) * 100) : 0
             return (
-              <li key={e.id} className={`ft-card ${e.done ? 'done' : ''}`} style={{ '--cat-color': meta.color } as React.CSSProperties}>
-                <div className="ft-card-accent" />
-                <label className="ft-card-check">
-                  <input type="checkbox" checked={e.done} onChange={() => toggleDone(e.id)} />
-                </label>
-                <div className="ft-card-img-wrap">
-                  <img src={e.imageDataUrl ?? e.imageUrl} alt="" className="ft-card-img" />
-                  <span className="ft-card-emoji">{e.iconEmoji}</span>
+              <div key={cat} className="ft-cat-bar" style={{ '--cat-color': meta.color } as React.CSSProperties}>
+                <div className="ft-cat-bar-header">
+                  <span className="ft-cat-bar-icon">{meta.emoji}</span>
+                  <span className="ft-cat-bar-name">{meta.label}</span>
+                  <span className="ft-cat-bar-detail">{s.count} · {s.minutes} min · {s.calories} kcal</span>
                 </div>
-                <div className="ft-card-body">
-                  <div className="ft-card-top">
-                    <span className="ft-card-name">{e.name}</span>
-                    <span className="ft-card-xp">+{exXp} XP</span>
-                  </div>
-                  <span className="ft-card-parts">{parts}</span>
-                  <div className="ft-card-stats">
-                    <span className="ft-card-cat-pill" style={{ background: `${meta.color}20`, color: meta.color, borderColor: `${meta.color}40` }}>
-                      {meta.emoji} {meta.label}
-                    </span>
-                    {liftBit ? <span className="ft-card-detail">{liftBit}</span> : null}
-                    {e.minutes > 0 ? <span className="ft-card-detail">{e.minutes} min</span> : null}
-                    <span className="ft-card-detail ft-card-kcal">~{e.caloriesBurned} kcal</span>
-                  </div>
+                <div className="ft-cat-bar-track">
+                  <div className="ft-cat-bar-fill" style={{ width: `${Math.max(4, pct)}%` }} />
                 </div>
-                <button type="button" className="ft-card-remove" onClick={() => removeRow(e.id)} aria-label="Remove">✕</button>
-              </li>
+              </div>
             )
           })}
-        </ul>
-      )}
+        </div>
+      </div>
+
+      <div className="ft-section-card">
+        <div className="ft-section-head">
+          <div>
+            <p className="ft-panel-kicker">Logbook</p>
+            <h3 className="ft-section-title">Add exercise</h3>
+          </div>
+          <p className="ft-section-note">Build a clean daily record with duration, sets, and optional photos.</p>
+        </div>
+
+        {!showForm ? (
+          <button type="button" className="ft-add-btn" onClick={() => setShowForm(true)}>
+            + Add exercise
+          </button>
+        ) : (
+          <form className="ft-form" onSubmit={addExercise}>
+            <div className="ft-form-header">
+              <h3 className="ft-form-title">Log exercise</h3>
+              <button type="button" className="ft-form-close" onClick={() => setShowForm(false)} aria-label="Close">✕</button>
+            </div>
+
+            <label className="field">
+              <span className="field-label">Exercise</span>
+              <select className="log-input month-select" value={pickId} onChange={(e) => { setPickId(e.target.value); setFormError(null); const v = e.target.value; if (v && v !== '__custom__') { const d = getExerciseById(v); if (d) setCustomCategory(d.category) } }}>
+                <option value="">— Choose exercise —</option>
+                {CATEGORY_ORDER.map((cat) => {
+                  const items = EXERCISE_LIBRARY.filter((ex) => ex.category === cat)
+                  if (!items.length) return null
+                  return (
+                    <optgroup key={cat} label={`${CATEGORY_META[cat].emoji} ${CATEGORY_META[cat].label}`}>
+                      {items.map((ex) => <option key={ex.id} value={ex.id}>{ex.iconEmoji} {ex.name}</option>)}
+                    </optgroup>
+                  )
+                })}
+                <option value="__custom__">✏️ Custom exercise…</option>
+              </select>
+            </label>
+
+            {pickId ? (
+              <div className="ft-exercise-preview">
+                <div className="ft-preview-visual">
+                  <div className="ft-preview-img-wrap">
+                    <img src={pendingPhoto ?? (selectedDef?.imageUrl ?? CATEGORY_EXERCISE_IMAGE[customCategory])} alt="" className="ft-preview-img" />
+                    <span className="ft-preview-emoji">{selectedDef?.iconEmoji ?? CATEGORY_META[customCategory].emoji}</span>
+                  </div>
+                  {selectedDef ? <BodyMap highlight={selectedDef.bodyParts} className="ft-preview-bodymap" /> : null}
+                </div>
+                {selectedDef ? (
+                  <div className="ft-preview-tags">
+                    {selectedDef.bodyParts.map((p) => <span key={p} className="ft-bp-tag">{p}</span>)}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
+            {pickId === '__custom__' ? (
+              <div className="ft-custom-fields">
+                <label className="field"><span className="field-label">Custom name</span><input className="log-input" type="text" placeholder="e.g. Cable crossover" value={customName} onChange={(e) => setCustomName(e.target.value)} /></label>
+                <label className="field"><span className="field-label">Category</span>
+                  <select className="log-input month-select" value={customCategory} onChange={(e) => setCustomCategory(e.target.value as ExerciseCategory)}>
+                    {CATEGORY_ORDER.map((cat) => <option key={cat} value={cat}>{CATEGORY_META[cat].emoji} {CATEGORY_META[cat].label}</option>)}
+                  </select>
+                </label>
+                <fieldset className="ft-bp-fieldset">
+                  <legend className="field-label">Body areas</legend>
+                  <div className="ft-bp-grid">
+                    {CUSTOM_BODY_PART_OPTIONS.map((part) => (
+                      <label key={part} className="ft-bp-check">
+                        <input type="checkbox" checked={customBodyParts.includes(part)} onChange={() => toggleBodyPart(part)} />{part}
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
+              </div>
+            ) : null}
+
+            <div className="ft-inputs-row">
+              {showLiftFields ? (
+                <>
+                  <label className="field"><span className="field-label">Weight (lb)</span><input className="log-input" type="number" min={0} step={0.5} placeholder="135" value={newWeightLb} onChange={(e) => setNewWeightLb(e.target.value === '' ? '' : Number(e.target.value))} /></label>
+                  <label className="field"><span className="field-label">Reps</span><input className="log-input" type="number" min={0} step={1} value={newReps} onChange={(e) => setNewReps(e.target.value === '' ? '' : Math.round(Number(e.target.value)))} /></label>
+                  <label className="field"><span className="field-label">Sets</span><input className="log-input" type="number" min={0} step={1} value={newSets} onChange={(e) => setNewSets(e.target.value === '' ? '' : Math.round(Number(e.target.value)))} /></label>
+                </>
+              ) : null}
+              <label className="field"><span className="field-label">Minutes</span><input className="log-input" type="number" min={0} step={1} placeholder="30" value={newMinutes} onChange={(e) => setNewMinutes(e.target.value === '' ? '' : Number(e.target.value))} /></label>
+            </div>
+
+            <label className="field ft-photo-field">
+              <span className="field-label">Photo (optional)</span>
+              <input className="file-input" type="file" accept="image/*" onChange={async (ev) => { const file = ev.target.files?.[0]; ev.target.value = ''; if (!file) return; const d = await resizeImageFileToJpegDataUrl(file); if (d) setPendingPhoto(d) }} />
+              {pendingPhoto ? <button type="button" className="secondary-button ft-photo-rm" onClick={() => setPendingPhoto(null)}>Remove photo</button> : null}
+            </label>
+
+            <div className="ft-kcal-preview" aria-live="polite">
+              {previewCalories == null ? 'Pick an exercise to see estimated burn' : <>Est. burn: <strong>{previewCalories}</strong> kcal</>}
+            </div>
+
+            {formError ? <p className="ft-form-error">{formError}</p> : null}
+            <button type="submit" className="primary-button ft-submit">Add to this day</button>
+          </form>
+        )}
+      </div>
+
+      <div className="ft-section-card">
+        <div className="ft-section-head">
+          <div>
+            <p className="ft-panel-kicker">Daily log</p>
+            <h3 className="ft-section-title">Logged exercises</h3>
+          </div>
+          <p className="ft-section-note">Review, complete, or remove entries for this workout day.</p>
+        </div>
+
+        {entries.length === 0 ? (
+          <p className="ft-empty">No exercises logged for this day yet.</p>
+        ) : (
+          <ul className="ft-exercise-list">
+            {entries.map((e) => {
+              const meta = CATEGORY_META[e.category]
+              const parts = e.bodyParts.length ? e.bodyParts.join(' · ') : '—'
+              const liftBit = e.weightLb != null && e.weightLb > 0 && e.repsPerSet && e.sets
+                ? `${e.weightLb} lb × ${e.repsPerSet} × ${e.sets}`
+                : e.repsPerSet && e.sets ? `${e.repsPerSet} × ${e.sets}` : null
+              return (
+                <li key={e.id} className={`ft-card ${e.done ? 'done' : ''}`} style={{ '--cat-color': meta.color } as React.CSSProperties}>
+                  <div className="ft-card-accent" />
+                  <label className="ft-card-check">
+                    <input type="checkbox" checked={e.done} onChange={() => toggleDone(e.id)} />
+                  </label>
+                  <div className="ft-card-img-wrap">
+                    <img src={e.imageDataUrl ?? e.imageUrl} alt="" className="ft-card-img" />
+                    <span className="ft-card-emoji">{e.iconEmoji}</span>
+                  </div>
+                  <div className="ft-card-body">
+                    <div className="ft-card-top">
+                      <span className="ft-card-name">{e.name}</span>
+                    </div>
+                    <span className="ft-card-parts">{parts}</span>
+                    <div className="ft-card-stats">
+                      <span className="ft-card-cat-pill" style={{ background: `${meta.color}20`, color: meta.color, borderColor: `${meta.color}40` }}>
+                        {meta.emoji} {meta.label}
+                      </span>
+                      {liftBit ? <span className="ft-card-detail">{liftBit}</span> : null}
+                      {e.minutes > 0 ? <span className="ft-card-detail">{e.minutes} min</span> : null}
+                      <span className="ft-card-detail ft-card-kcal">~{e.caloriesBurned} kcal</span>
+                    </div>
+                  </div>
+                  <button type="button" className="ft-card-remove" onClick={() => removeRow(e.id)} aria-label="Remove">✕</button>
+                </li>
+              )
+            })}
+          </ul>
+        )}
+      </div>
     </section>
   )
 }

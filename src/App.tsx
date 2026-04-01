@@ -1,5 +1,5 @@
 import './App.css'
-import { useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { Login, type AuthUser } from './Login'
 import { FitnessDemoPanel } from './FitnessDemoPanel'
 import { auth, db, firebaseConfigError } from './firebase-config'
@@ -31,6 +31,11 @@ type FoodEntry = {
   meal?: MealCategory
 }
 
+type GuestEntry = FoodEntry & {
+  dateKey: string
+  createdAtMillis: number
+}
+
 type MealCategory = 'breakfast' | 'lunch' | 'dinner' | 'snack'
 
 type Theme = 'light' | 'dark'
@@ -38,6 +43,8 @@ type CoachMode = 'normal' | 'video'
 type AppSection = 'calendar' | 'profile' | 'log' | 'fitness' | 'videos' | 'coach'
 
 const THEME_KEY = 'foodLogTheme'
+const GUEST_KEY = 'guestMode'
+const GUEST_ENTRIES_KEY = 'guestFoodEntries'
 
 function getMealMeta(meal: MealCategory) {
   switch (meal) {
@@ -79,6 +86,48 @@ const COMBO_CATEGORY_LABEL: Record<ComboCategory, string> = {
   meat: 'Meat',
   mainMeal: 'Main meal',
   tool: 'Tool to cook',
+}
+const PRIMARY_SECTION_ORDER: AppSection[] = ['calendar', 'log', 'fitness', 'videos', 'coach']
+const SECTION_META: Record<
+  AppSection,
+  { label: string; icon: string; eyebrow: string; description: string }
+> = {
+  calendar: {
+    label: 'Calendar',
+    icon: '🗓️',
+    eyebrow: 'Monthly overview',
+    description: 'Browse your month, spot patterns, and jump into any day with one click.',
+  },
+  profile: {
+    label: 'Profile',
+    icon: '👤',
+    eyebrow: 'Personal targets',
+    description: 'Set your core stats so the app can show goal progress and better guidance.',
+  },
+  log: {
+    label: 'Food log',
+    icon: '🥗',
+    eyebrow: 'Daily nutrition',
+    description: 'Add meals, estimate calories, and keep your daily intake tidy and visible.',
+  },
+  fitness: {
+    label: 'Fitness',
+    icon: '💪',
+    eyebrow: 'Movement tracker',
+    description: 'Record activity, review exercise balance, and pair your meals with workouts.',
+  },
+  videos: {
+    label: 'Recipe videos',
+    icon: '🎬',
+    eyebrow: 'Cooking inspiration',
+    description: 'Filter ingredients and open recipe videos that match what you want to cook.',
+  },
+  coach: {
+    label: 'AI coach',
+    icon: '✨',
+    eyebrow: 'Smart recommendations',
+    description: 'Generate a meal plan from your profile, today’s log, and favorite ingredients.',
+  },
 }
 
 function apiUrl(path: string) {
@@ -500,6 +549,8 @@ function App() {
   const [cookRecipeRows, setCookRecipeRows] = useState<CookCsvRecipe[]>(COOK_RECIPE_SNAPSHOT)
   const [cookRecipeLoading, setCookRecipeLoading] = useState(false)
   const [cookRecipeError, setCookRecipeError] = useState<string | null>(null)
+  const [isUserMenuOpen, setIsUserMenuOpen] = useState(false)
+  const userMenuRef = useRef<HTMLDivElement | null>(null)
 
   const [theme, setTheme] = useState<Theme>(() => {
     if (typeof window === 'undefined') return 'dark'
@@ -510,6 +561,7 @@ function App() {
   const [authLoading, setAuthLoading] = useState(true)
   const [user, setUser] = useState<AuthUser | null>(null)
   const [userId, setUserId] = useState<string | null>(null)
+  const [isGuest, setIsGuest] = useState(false)
   const [totalUsers, setTotalUsers] = useState<number | null>(null)
   const [totalUsersLoading, setTotalUsersLoading] = useState(false)
   const [totalUsersError, setTotalUsersError] = useState<string | null>(null)
@@ -572,19 +624,36 @@ function App() {
 
   useEffect(() => {
     if (!auth) {
-      setUser(null)
-      setUserId(null)
+      const savedGuest = window.localStorage.getItem(GUEST_KEY)
+      if (savedGuest === 'true') {
+        setIsGuest(true)
+        setUser({ email: 'guest', name: 'Guest', picture: undefined })
+        setUserId('__guest__')
+      } else {
+        setUser(null)
+        setUserId(null)
+      }
       setAuthLoading(false)
       return
     }
 
     const unsub = onAuthStateChanged(auth, (u) => {
       if (!u) {
-        setUser(null)
-        setUserId(null)
+        const savedGuest = window.localStorage.getItem(GUEST_KEY)
+        if (savedGuest === 'true') {
+          setIsGuest(true)
+          setUser({ email: 'guest', name: 'Guest', picture: undefined })
+          setUserId('__guest__')
+        } else {
+          setUser(null)
+          setUserId(null)
+          setIsGuest(false)
+        }
         setAuthLoading(false)
         return
       }
+      setIsGuest(false)
+      try { window.localStorage.removeItem(GUEST_KEY) } catch { /* ignore */ }
       setUserId(u.uid)
       setUser(toAuthUser(u))
       setAuthLoading(false)
@@ -593,9 +662,8 @@ function App() {
   }, [])
 
   useEffect(() => {
-    if (!db || !userId || !user?.email) return
+    if (!db || !userId || !user?.email || isGuest) return
 
-    // Record a unique active user document so we can count total users.
     void setDoc(
       doc(db, 'app_users', userId),
       {
@@ -606,7 +674,7 @@ function App() {
       },
       { merge: true },
     )
-  }, [db, userId, user?.email, user?.name])
+  }, [db, userId, user?.email, user?.name, isGuest])
 
   const isOwner = Boolean(user?.email && OWNER_EMAIL && user.email.toLowerCase() === OWNER_EMAIL)
 
@@ -642,6 +710,30 @@ function App() {
       setProfileHeightCm('')
       setProfileWeightLb('')
       setDailyCalorieNeed(null)
+      return
+    }
+
+    if (isGuest) {
+      try {
+        const raw = window.localStorage.getItem('guestProfile')
+        if (raw) {
+          const data = JSON.parse(raw) as Partial<CalorieProfile>
+          const parsed: CalorieProfile = {
+            sex: data.sex === 'female' ? 'female' : 'male',
+            age: typeof data.age === 'number' ? data.age : 0,
+            heightCm: typeof data.heightCm === 'number' ? data.heightCm : 0,
+            weightKg: typeof data.weightKg === 'number' ? data.weightKg : 0,
+            dailyCalories: typeof data.dailyCalories === 'number' ? data.dailyCalories : 0,
+          }
+          setProfileDoc(parsed)
+          setProfileSex(parsed.sex)
+          setProfileAge(parsed.age || '')
+          setProfileHeightCm(parsed.heightCm || '')
+          setProfileWeightLb(parsed.weightKg ? parsed.weightKg / KG_PER_LB : '')
+          setDailyCalorieNeed(parsed.dailyCalories || null)
+        }
+      } catch { /* ignore */ }
+      setProfileLoading(false)
       return
     }
 
@@ -688,7 +780,7 @@ function App() {
     )
 
     return () => unsub()
-  }, [userId])
+  }, [userId, isGuest])
 
   useEffect(() => {
     if (!userId) {
@@ -699,6 +791,40 @@ function App() {
       return
     }
 
+    if (isGuest) {
+      const loadGuestEntries = () => {
+        try {
+          const raw = window.localStorage.getItem(GUEST_ENTRIES_KEY)
+          const all = raw ? (JSON.parse(raw) as GuestEntry[]) : []
+          const totals: Record<string, number> = {}
+          for (const x of all) {
+            if (!x.name || !x.dateKey) continue
+            totals[x.dateKey] = (totals[x.dateKey] ?? 0) + x.calories
+          }
+          setCaloriesByDateKey(totals)
+          const filtered = all
+            .filter((x) => x.name && x.dateKey === selectedDate)
+            .sort((a, b) => a.createdAtMillis - b.createdAtMillis)
+            .map((x) => ({
+              id: x.id,
+              name: x.name,
+              calories: x.calories,
+              imageDataUrl: x.imageDataUrl,
+              imageUrl: x.imageUrl,
+              iconEmoji: x.iconEmoji,
+              meal: x.meal,
+            }))
+          setEntries(filtered)
+        } catch {
+          setEntries([])
+        }
+        setEntriesLoading(false)
+        setEntriesError(null)
+      }
+      loadGuestEntries()
+      return
+    }
+
     setEntriesLoading(true)
     setEntriesError(null)
     if (!db) {
@@ -706,8 +832,6 @@ function App() {
       setEntriesError('Firestore is not available.')
       return
     }
-    // Avoid composite-index requirements by only filtering by uid in the query.
-    // We filter by dateKey + sort in-memory using createdAtMillis.
     const q = query(collection(db, 'calendar_logs'), where('uid', '==', userId))
     const unsub = onSnapshot(
       q,
@@ -753,24 +877,57 @@ function App() {
       },
     )
     return () => unsub()
-  }, [userId, selectedDate])
+  }, [userId, selectedDate, isGuest])
 
   const addEntry = async (entry: Omit<FoodEntry, 'id'>) => {
-    if (!userId || !db) return
+    if (!userId) return
     const trimmedName = entry.name.trim()
     if (!trimmedName) return
     if (!Number.isFinite(entry.calories) || entry.calories < 0) return
 
-    // Firestore docs are limited to ~1MB; avoid storing very large base64 images.
-    // We still keep the image in memory for detection, but drop it when persisting if too large.
+    const iconEmoji = entry.iconEmoji ?? getFoodEmoji(trimmedName)
+
+    if (isGuest) {
+      try {
+        const raw = window.localStorage.getItem(GUEST_ENTRIES_KEY)
+        const all: GuestEntry[] = raw ? (JSON.parse(raw) as GuestEntry[]) : []
+        const newEntry: GuestEntry = {
+          id: `guest-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          name: trimmedName,
+          calories: entry.calories,
+          iconEmoji,
+          meal: entry.meal ?? 'snack',
+          dateKey: selectedDate,
+          createdAtMillis: Date.now(),
+        }
+        all.push(newEntry)
+        window.localStorage.setItem(GUEST_ENTRIES_KEY, JSON.stringify(all))
+        const totals: Record<string, number> = {}
+        for (const x of all) {
+          if (!x.name || !x.dateKey) continue
+          totals[x.dateKey] = (totals[x.dateKey] ?? 0) + x.calories
+        }
+        setCaloriesByDateKey(totals)
+        const filtered = all
+          .filter((x) => x.name && x.dateKey === selectedDate)
+          .sort((a, b) => a.createdAtMillis - b.createdAtMillis)
+          .map((x) => ({
+            id: x.id,
+            name: x.name,
+            calories: x.calories,
+            iconEmoji: x.iconEmoji,
+            meal: x.meal,
+          }))
+        setEntries(filtered)
+      } catch { /* ignore storage errors */ }
+      return
+    }
+
+    if (!db) return
     let imageUrl: string | null = entry.imageUrl ?? null
     let imageDataUrl: string | null = entry.imageDataUrl ?? null
-
-    // If the user uploaded an image, we do NOT persist it (to avoid size limits and keep storage free).
-    // We store only a generated emoji icon based on the detected/entered name.
     if (imageDataUrl) imageDataUrl = null
     if (imageUrl) imageUrl = null
-    const iconEmoji = entry.iconEmoji ?? getFoodEmoji(trimmedName)
 
     await addDoc(collection(db, 'calendar_logs'), {
       uid: userId,
@@ -788,7 +945,26 @@ function App() {
   }
 
   const removeEntry = async (id: string) => {
-    if (!userId || !db) return
+    if (!userId) return
+
+    if (isGuest) {
+      try {
+        const raw = window.localStorage.getItem(GUEST_ENTRIES_KEY)
+        const all: GuestEntry[] = raw ? (JSON.parse(raw) as GuestEntry[]) : []
+        const updated = all.filter((x) => x.id !== id)
+        window.localStorage.setItem(GUEST_ENTRIES_KEY, JSON.stringify(updated))
+        const totals: Record<string, number> = {}
+        for (const x of updated) {
+          if (!x.name || !x.dateKey) continue
+          totals[x.dateKey] = (totals[x.dateKey] ?? 0) + x.calories
+        }
+        setCaloriesByDateKey(totals)
+        setEntries((prev) => prev.filter((e) => e.id !== id))
+      } catch { /* ignore */ }
+      return
+    }
+
+    if (!db) return
     await deleteDoc(doc(db, 'calendar_logs', id))
   }
 
@@ -957,14 +1133,23 @@ function App() {
 
     setDailyCalorieNeed(estimated)
 
+    const profile: CalorieProfile = {
+      sex: profileSex,
+      age: ageNumber,
+      heightCm: heightNumber,
+      weightKg: weightKgNumber,
+      dailyCalories: estimated,
+    }
+    setProfileDoc(profile)
+
+    if (isGuest) {
+      try {
+        window.localStorage.setItem('guestProfile', JSON.stringify(profile))
+      } catch { /* ignore */ }
+      return
+    }
+
     try {
-      const profile: CalorieProfile = {
-        sex: profileSex,
-        age: ageNumber,
-        heightCm: heightNumber,
-        weightKg: weightKgNumber,
-        dailyCalories: estimated,
-      }
       if (!userId || !db) return
       await setDoc(
         doc(db, 'user_profiles', userId),
@@ -1089,6 +1274,20 @@ function App() {
     )
   }, [coachMode, selectedCombos, bilibiliRecipeResults])
 
+  useEffect(() => {
+    if (!isUserMenuOpen) return
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!userMenuRef.current) return
+      if (!userMenuRef.current.contains(event.target as Node)) {
+        setIsUserMenuOpen(false)
+      }
+    }
+
+    window.addEventListener('mousedown', handlePointerDown)
+    return () => window.removeEventListener('mousedown', handlePointerDown)
+  }, [isUserMenuOpen])
+
   if (authLoading) {
     return (
       <div className="login-page">
@@ -1101,7 +1300,16 @@ function App() {
   }
 
   if (!user) {
-    return <Login />
+    return (
+      <Login
+        onGuestLogin={() => {
+          try { window.localStorage.setItem(GUEST_KEY, 'true') } catch { /* ignore */ }
+          setIsGuest(true)
+          setUser({ email: 'guest', name: 'Guest', picture: undefined })
+          setUserId('__guest__')
+        }}
+      />
+    )
   }
 
   const handleAskCoach = async () => {
@@ -1230,6 +1438,13 @@ function App() {
   }
 
   const handleLogout = async () => {
+    if (isGuest) {
+      try { window.localStorage.removeItem(GUEST_KEY) } catch { /* ignore */ }
+      setIsGuest(false)
+      setUser(null)
+      setUserId(null)
+      return
+    }
     if (!auth) return
     await signOut(auth)
   }
@@ -1240,78 +1455,228 @@ function App() {
     )
   }
 
+  const currentSectionMeta = SECTION_META[appSection]
+  const displayName = isGuest ? 'Guest' : user.name || user.email || 'User'
+  const calorieDelta = dailyCalorieNeed ? dailyCalorieNeed - totalCaloriesForDay : null
+  const activeMonthDays = monthGoalRows.filter((row) => row.calories > 0).length
+  const goalHitDays = dailyCalorieNeed
+    ? monthGoalRows.filter((row) => row.calories >= dailyCalorieNeed).length
+    : 0
+  const selectedDateShort = selectedDateLabel.replace(/,\s*\d{4}$/, '')
+  const currentMonthLabel = getMonthLabel(currentYear, currentMonth)
+  const monthTotalCalories = monthGoalRows.reduce((sum, row) => sum + row.calories, 0)
+  const averageActiveDayCalories =
+    activeMonthDays > 0 ? Math.round(monthTotalCalories / activeMonthDays) : 0
+  const selectedDayMonthRow = monthGoalRows.find((row) => row.dateKey === selectedDate) ?? null
+  const selectedDayGoalPct = selectedDayMonthRow?.percent ?? null
+
   return (
     <div className={`app-root theme-${theme}`}>
       <header className="app-header">
         <div className="app-header-inner">
-          <div>
+          <div className="app-hero-copy">
+            <span className="app-eyebrow">Nutrition and wellness dashboard</span>
             <h1>Food Log Calendar</h1>
             <p className="app-subtitle">
-              Use the tabs below to switch between Calendar, Profile, Food log, Recipe videos, and AI
-              coach. Your data is stored in the cloud for your account.
+              Keep meals, workouts, recipe ideas, and AI guidance in one clean place with synced
+              progress across your account.
             </p>
+            <div className="app-hero-tags" aria-label="Current context">
+              <span className="app-hero-tag">Selected day: {selectedDateShort}</span>
+              <span className="app-hero-tag">
+                Current view: {currentSectionMeta.icon} {currentSectionMeta.label}
+              </span>
+              <span className="app-hero-tag">
+                {theme === 'dark' ? 'Dark mode' : 'Light mode'}
+              </span>
+            </div>
           </div>
-          <div className="app-header-user">
-            <button
-              type="button"
-              className="theme-toggle"
-              onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-            >
-              {theme === 'dark' ? '☀︎ Light' : '🌙 Dark'}
-            </button>
-            {isOwner && (
-              <div className="admin-users-pill" title="Admin-only total users">
-                Users:{' '}
-                {totalUsersLoading ? '…' : totalUsersError ? 'error' : (totalUsers ?? 0).toString()}
+          <div className="app-header-user" ref={userMenuRef}>
+            <div className="app-header-controls">
+              <div className="app-user-menu">
+                <button
+                  type="button"
+                  className={`app-user-pill${isUserMenuOpen ? ' open' : ''}`}
+                  onClick={() => setIsUserMenuOpen((open) => !open)}
+                  aria-haspopup="menu"
+                  aria-expanded={isUserMenuOpen}
+                >
+                  <span className="app-user-avatar" aria-hidden="true">
+                    {displayName.slice(0, 1).toUpperCase()}
+                  </span>
+                  <div className="app-user-copy">
+                    <span className="app-user-label">{isGuest ? 'Local guest profile' : 'Signed in as'}</span>
+                    <span className="app-user-name">{displayName}</span>
+                  </div>
+                  <span className="app-user-chevron" aria-hidden="true">
+                    ▾
+                  </span>
+                </button>
+                {isUserMenuOpen ? (
+                  <div className="app-user-dropdown" role="menu" aria-label="User menu">
+                    <button
+                      type="button"
+                      className="app-user-dropdown-item"
+                      role="menuitem"
+                      onClick={() => {
+                        setAppSection('profile')
+                        setIsUserMenuOpen(false)
+                      }}
+                    >
+                      <span className="app-user-dropdown-icon" aria-hidden="true">
+                        👤
+                      </span>
+                      <span className="app-user-dropdown-copy">
+                        <span className="app-user-dropdown-title">Profile</span>
+                        <span className="app-user-dropdown-caption">Change profile settings</span>
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      className="app-user-dropdown-item danger"
+                      role="menuitem"
+                      onClick={() => {
+                        setIsUserMenuOpen(false)
+                        void handleLogout()
+                      }}
+                    >
+                      <span className="app-user-dropdown-icon" aria-hidden="true">
+                        ⇥
+                      </span>
+                      <span className="app-user-dropdown-copy">
+                        <span className="app-user-dropdown-title">{isGuest ? 'Sign In' : 'Log out'}</span>
+                        <span className="app-user-dropdown-caption">
+                          {isGuest ? 'Switch to an account' : 'End this session'}
+                        </span>
+                      </span>
+                    </button>
+                  </div>
+                ) : null}
               </div>
-            )}
-            <span className="app-user-name">{user.name || user.email}</span>
-            <button type="button" className="logout-button" onClick={handleLogout}>
-              Log out
-            </button>
+              <button
+                type="button"
+                className="theme-toggle"
+                onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+              >
+                {theme === 'dark' ? '☀︎ Light' : '🌙 Dark'}
+              </button>
+              {isOwner && (
+                <div className="admin-users-pill" title="Admin-only total users">
+                  Users:{' '}
+                  {totalUsersLoading ? '…' : totalUsersError ? 'error' : (totalUsers ?? 0).toString()}
+                </div>
+              )}
+            </div>
           </div>
+        </div>
+        <div className="app-summary-grid" aria-label="Quick overview">
+          <article className="app-summary-card accent-blue">
+            <span className="app-summary-label">Selected day</span>
+            <strong className="app-summary-value">{selectedDateShort}</strong>
+            <span className="app-summary-note">{entries.length} logged item{entries.length === 1 ? '' : 's'}</span>
+          </article>
+          <article className="app-summary-card accent-emerald">
+            <span className="app-summary-label">Calories today</span>
+            <strong className="app-summary-value">{totalCaloriesForDay.toLocaleString()} kcal</strong>
+            <span className="app-summary-note">
+              {dailyCalorieNeed
+                ? calorieDelta != null && calorieDelta >= 0
+                  ? `${calorieDelta.toLocaleString()} kcal remaining`
+                  : `${Math.abs(calorieDelta ?? 0).toLocaleString()} kcal over goal`
+                : 'Set a daily goal in Profile'}
+            </span>
+          </article>
+          <article className="app-summary-card accent-violet">
+            <span className="app-summary-label">Active days this month</span>
+            <strong className="app-summary-value">{activeMonthDays}</strong>
+            <span className="app-summary-note">{getMonthLabel(currentYear, currentMonth)}</span>
+          </article>
+          <article className="app-summary-card accent-amber">
+            <span className="app-summary-label">Goal-hit days</span>
+            <strong className="app-summary-value">{goalHitDays}</strong>
+            <span className="app-summary-note">
+              {dailyCalorieNeed ? 'Days at or above target' : 'Available after setting a target'}
+            </span>
+          </article>
         </div>
       </header>
 
       <main className="app-main">
-        <nav className="app-section-nav" aria-label="App sections">
-          {(
-            [
-              ['calendar', 'Calendar'],
-              ['profile', 'Profile'],
-              ['log', 'Food log'],
-              ['fitness', 'Fitness (demo)'],
-              ['videos', 'Recipe videos'],
-              ['coach', 'AI coach'],
-            ] as const
-          ).map(([id, label]) => (
-            <button
-              key={id}
-              type="button"
-              className={`section-nav-button${appSection === id ? ' active' : ''}`}
-              onClick={() => setAppSection(id)}
-            >
-              {label}
-            </button>
-          ))}
-        </nav>
+        {isGuest && (
+          <div className="guest-banner">
+            <span className="guest-banner-text">
+              <strong>Guest mode</strong> — your data is saved locally on this browser only.
+              Sign up to sync across devices.
+            </span>
+            <div className="guest-banner-actions">
+              <button
+                type="button"
+                className="guest-banner-btn primary"
+                onClick={handleLogout}
+              >
+                Sign Up / Sign In
+              </button>
+            </div>
+          </div>
+        )}
+        <section className="app-section-shell">
+          <div className="app-section-heading">
+            <div>
+              <p className="app-section-kicker">{currentSectionMeta.eyebrow}</p>
+              <h2 className="app-section-title">
+                <span aria-hidden="true">{currentSectionMeta.icon}</span> {currentSectionMeta.label}
+              </h2>
+              <p className="app-section-description">{currentSectionMeta.description}</p>
+            </div>
+          </div>
+          <nav className="app-section-nav" aria-label="App sections">
+            {PRIMARY_SECTION_ORDER.map((sectionId) => {
+              const sectionMeta = SECTION_META[sectionId]
+              return (
+                <button
+                  key={sectionId}
+                  type="button"
+                  className={`section-nav-button${appSection === sectionId ? ' active' : ''}`}
+                  onClick={() => setAppSection(sectionId)}
+                >
+                  <span className="section-nav-icon" aria-hidden="true">
+                    {sectionMeta.icon}
+                  </span>
+                  <span className="section-nav-copy">
+                    <span className="section-nav-label">{sectionMeta.label}</span>
+                    <span className="section-nav-caption">{sectionMeta.eyebrow}</span>
+                  </span>
+                </button>
+              )
+            })}
+          </nav>
+        </section>
         <div className="app-section-content">
           {appSection === 'calendar' && (
         <section className="calendar-card" aria-label="Calendar">
-          <div className="calendar-header">
-            <button type="button" onClick={onPrevMonth} className="nav-button">
-              ‹
-            </button>
-            <button
-              type="button"
-              className="calendar-title month-button"
-              onClick={() => setIsMonthPickerOpen((open) => !open)}
-            >
-              {getMonthLabel(currentYear, currentMonth)}
-            </button>
-            <button type="button" onClick={onNextMonth} className="nav-button">
-              ›
-            </button>
+          <div className="calendar-toolbar">
+            <div>
+              <p className="calendar-kicker">Monthly view</p>
+              <h3 className="calendar-heading">{currentMonthLabel}</h3>
+              <p className="calendar-caption">
+                Scan your consistency, compare goal progress, and jump into a specific day quickly.
+              </p>
+            </div>
+            <div className="calendar-toolbar-actions">
+              <button type="button" onClick={onPrevMonth} className="nav-button" aria-label="Previous month">
+                ‹
+              </button>
+              <button
+                type="button"
+                className="calendar-title month-button"
+                onClick={() => setIsMonthPickerOpen((open) => !open)}
+              >
+                {currentMonthLabel}
+              </button>
+              <button type="button" onClick={onNextMonth} className="nav-button" aria-label="Next month">
+                ›
+              </button>
+            </div>
           </div>
 
           {isMonthPickerOpen && (
@@ -1352,93 +1717,138 @@ function App() {
             </div>
           )}
 
-          <div className="calendar-grid" role="grid">
-            <div className="weekday-row" role="row">
-              {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day) => (
-                <div key={day} className="weekday-cell" role="columnheader">
-                  {day}
-                </div>
-              ))}
-            </div>
-
-            {calendarWeeks.map((week, weekIndex) => (
-              <div key={weekIndex} className="week-row" role="row">
-                {week.map((day, dayIndex) => {
-                  if (!day) {
-                    return <div key={dayIndex} className="day-cell empty" />
-                  }
-
-                  const dateKey = formatDateKey(new Date(currentYear, currentMonth, day))
-                  const isSelected = dateKey === selectedDate
-                  const isToday =
-                    dateKey === formatDateKey(today) &&
-                    currentMonth === today.getMonth() &&
-                    currentYear === today.getFullYear()
-
-                  const dayCals = caloriesByDateKey[dateKey] ?? 0
-                  const dayGoalPctRaw =
-                    dailyCalorieNeed && dailyCalorieNeed > 0
-                      ? Math.round((dayCals / dailyCalorieNeed) * 100)
-                      : null
-                  const dayBarWidth =
-                    dayGoalPctRaw != null ? Math.min(100, Math.max(0, dayGoalPctRaw)) : 0
-                  const dayAtOrOver =
-                    dailyCalorieNeed && dailyCalorieNeed > 0
-                      ? dayCals >= dailyCalorieNeed
-                      : false
-
-                  return (
-                    <button
-                      key={dayIndex}
-                      type="button"
-                      className={`day-cell button ${isSelected ? 'selected' : ''} ${
-                        isToday ? 'today' : ''
-                      }`}
-                      onClick={() => handleSelectDate(day)}
-                      aria-pressed={isSelected}
-                      aria-label={
-                        dayGoalPctRaw != null
-                          ? `${day} ${getMonthLabel(currentYear, currentMonth)}, ${dayGoalPctRaw}% of daily calorie goal`
-                          : undefined
-                      }
-                    >
-                      <span className="day-number">{day}</span>
-                      {dailyCalorieNeed && dailyCalorieNeed > 0 ? (
-                        <div className="day-goal-meter">
-                          <div className="day-goal-bar-track">
-                            <div
-                              className={`day-goal-bar-fill ${dayAtOrOver ? 'full' : ''}`}
-                              style={{ width: `${dayBarWidth}%` }}
-                            />
-                          </div>
-                          <span
-                            className={`day-goal-pct-label ${dayAtOrOver ? 'at-or-over' : ''}`}
-                          >
-                            {dayGoalPctRaw}%
-                          </span>
-                        </div>
-                      ) : null}
-                    </button>
-                  )
-                })}
-              </div>
-            ))}
+          <div className="calendar-overview-grid" aria-label="Calendar summary">
+            <article className="calendar-mini-card">
+              <span className="calendar-mini-label">Active days</span>
+              <strong className="calendar-mini-value">{activeMonthDays}</strong>
+              <span className="calendar-mini-note">Days with entries this month</span>
+            </article>
+            <article className="calendar-mini-card">
+              <span className="calendar-mini-label">Goal-hit days</span>
+              <strong className="calendar-mini-value">{goalHitDays}</strong>
+              <span className="calendar-mini-note">
+                {dailyCalorieNeed ? 'Reached target intake' : 'Set a goal to unlock'}
+              </span>
+            </article>
+            <article className="calendar-mini-card">
+              <span className="calendar-mini-label">Monthly calories</span>
+              <strong className="calendar-mini-value">{monthTotalCalories.toLocaleString()}</strong>
+              <span className="calendar-mini-note">{currentMonthLabel}</span>
+            </article>
+            <article className="calendar-mini-card">
+              <span className="calendar-mini-label">Selected day</span>
+              <strong className="calendar-mini-value">
+                {selectedDayGoalPct != null ? `${selectedDayGoalPct}%` : 'No goal'}
+              </strong>
+              <span className="calendar-mini-note">
+                {selectedDayMonthRow
+                  ? `${selectedDayMonthRow.calories.toLocaleString()} kcal logged`
+                  : selectedDateShort}
+              </span>
+            </article>
           </div>
 
-          <div className="month-goal-subview" aria-label="Daily calorie goal progress this month">
-            <h3 className="month-goal-subview-title">Goal reach by day</h3>
-            {!dailyCalorieNeed ? (
-              <p className="month-goal-subview-hint">
-                Set your daily calorie target in <strong>Profile</strong> to see each day&apos;s
-                percentage of goal.
-              </p>
-            ) : (
-              <>
-                <p className="month-goal-subview-caption">
-                  {getMonthLabel(currentYear, currentMonth)} · target{' '}
-                  <strong>{dailyCalorieNeed.toLocaleString()}</strong> kcal/day · tap a row to open
-                  that day in Food log
-                </p>
+          <div className="calendar-layout">
+            <div className="calendar-surface">
+              <div className="calendar-grid" role="grid">
+                <div className="weekday-row" role="row">
+                  {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day) => (
+                    <div key={day} className="weekday-cell" role="columnheader">
+                      {day}
+                    </div>
+                  ))}
+                </div>
+
+                {calendarWeeks.map((week, weekIndex) => (
+                  <div key={weekIndex} className="week-row" role="row">
+                    {week.map((day, dayIndex) => {
+                      if (!day) {
+                        return <div key={dayIndex} className="day-cell empty" />
+                      }
+
+                      const dateKey = formatDateKey(new Date(currentYear, currentMonth, day))
+                      const isSelected = dateKey === selectedDate
+                      const isToday =
+                        dateKey === formatDateKey(today) &&
+                        currentMonth === today.getMonth() &&
+                        currentYear === today.getFullYear()
+
+                      const dayCals = caloriesByDateKey[dateKey] ?? 0
+                      const dayGoalPctRaw =
+                        dailyCalorieNeed && dailyCalorieNeed > 0
+                          ? Math.round((dayCals / dailyCalorieNeed) * 100)
+                          : null
+                      const dayBarWidth =
+                        dayGoalPctRaw != null ? Math.min(100, Math.max(0, dayGoalPctRaw)) : 0
+                      const dayAtOrOver =
+                        dailyCalorieNeed && dailyCalorieNeed > 0
+                          ? dayCals >= dailyCalorieNeed
+                          : false
+
+                      return (
+                        <button
+                          key={dayIndex}
+                          type="button"
+                          className={`day-cell button ${isSelected ? 'selected' : ''} ${
+                            isToday ? 'today' : ''
+                          }`}
+                          onClick={() => handleSelectDate(day)}
+                          aria-pressed={isSelected}
+                          aria-label={
+                            dayGoalPctRaw != null
+                              ? `${day} ${currentMonthLabel}, ${dayGoalPctRaw}% of daily calorie goal`
+                              : undefined
+                          }
+                        >
+                          <span className="day-number">{day}</span>
+                          {dailyCalorieNeed && dailyCalorieNeed > 0 ? (
+                            <div className="day-goal-meter">
+                              <div className="day-goal-bar-track">
+                                <div
+                                  className={`day-goal-bar-fill ${dayAtOrOver ? 'full' : ''}`}
+                                  style={{ width: `${dayBarWidth}%` }}
+                                />
+                              </div>
+                              <span
+                                className={`day-goal-pct-label ${dayAtOrOver ? 'at-or-over' : ''}`}
+                              >
+                                {dayGoalPctRaw}%
+                              </span>
+                            </div>
+                          ) : null}
+                        </button>
+                      )
+                    })}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <aside className="month-goal-subview" aria-label="Daily calorie goal progress this month">
+              <div className="month-goal-header">
+                <div>
+                  <h3 className="month-goal-subview-title">Goal reach by day</h3>
+                  {!dailyCalorieNeed ? (
+                    <p className="month-goal-subview-hint">
+                      Set your daily calorie target in <strong>Profile</strong> to see each day&apos;s
+                      percentage of goal.
+                    </p>
+                  ) : (
+                    <p className="month-goal-subview-caption">
+                      Target <strong>{dailyCalorieNeed.toLocaleString()}</strong> kcal/day
+                    </p>
+                  )}
+                </div>
+                {dailyCalorieNeed ? (
+                  <div className="month-goal-inline-stat">
+                    <span className="month-goal-inline-value">
+                      {averageActiveDayCalories.toLocaleString()}
+                    </span>
+                    <span className="month-goal-inline-label">Avg active day</span>
+                  </div>
+                ) : null}
+              </div>
+              {dailyCalorieNeed ? (
                 <div className="month-goal-day-list" role="list">
                   {monthGoalRows.map(({ day, dateKey, calories, percent }) => {
                     const pct = percent ?? 0
@@ -1467,8 +1877,8 @@ function App() {
                     )
                   })}
                 </div>
-              </>
-            )}
+              ) : null}
+            </aside>
           </div>
         </section>
           )}
